@@ -1,0 +1,59 @@
+name: Bug report
+description: Something in the app doesn't work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Security problems go through private reporting instead** — see SECURITY.md.
+        Please don't paste client secrets, access tokens, or patient data.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got. Include the exact error text shown by the app.
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where it happened
+      options:
+        - EHR launch from OpenEMR (FHIR Assessments)
+        - Standalone launch
+        - Saving a response
+        - Admin page / client registration
+        - bin/register.php
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: check
+    attributes:
+      label: Output of "Check" for the site
+      description: From the admin page or `php bin/register.php --site=<name> --check`.
+      render: text
+  - type: input
+    id: openemr
+    attributes:
+      label: OpenEMR version / commit
+      placeholder: e.g. 8.1.0 or master@fd70ec0
+    validations:
+      required: true
+  - type: input
+    id: app
+    attributes:
+      label: App version / commit
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: PHP version, web server, OS
+      placeholder: e.g. PHP 8.3, Apache (XAMPP), Windows 11
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: PHP error log of the app, and OpenEMR's log around the same time (secrets removed).
+      render: text

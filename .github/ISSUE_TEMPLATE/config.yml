@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/openemr/oe-smart-questionnaire/security/advisories/new
+    about: Report privately — do not open a public issue.
+  - name: Questions and discussion
+    url: https://community.open-emr.org/
+    about: Ask on the OpenEMR community forum.
+  - name: OpenEMR core bugs (FHIR API, OAuth2, consent screen)
+    url: https://github.com/openemr/openemr/issues
+    about: Problems in OpenEMR itself belong in the main repository.

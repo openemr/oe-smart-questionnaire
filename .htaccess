@@ -1,0 +1,4 @@
+# OpenEMR SMART Questionnaires — deny everything outside public/.
+# The web root is public/; if the whole project is ever exposed, refuse it.
+# License: GNU GPL v3, https://github.com/openemr/openemr/blob/master/LICENSE
+Require all denied

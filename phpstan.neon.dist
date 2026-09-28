@@ -1,0 +1,10 @@
+# Static analysis of the application code. Tests are plain scripts (each defines its own
+# global check() helper) and are exercised by running them instead.
+parameters:
+    level: 8
+    paths:
+        - src
+        - public
+        - bin
+    bootstrapFiles:
+        - src/bootstrap.php

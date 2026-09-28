@@ -1,0 +1,26 @@
+# Normalize line endings in the repository; check out LF for code so CI (Linux) and
+# XAMPP (Windows) see identical files.
+* text=auto eol=lf
+*.php  text eol=lf diff=php
+*.js   text eol=lf
+*.css  text eol=lf
+*.md   text eol=lf diff=markdown
+*.json text eol=lf
+*.yml  text eol=lf
+*.xml  text eol=lf
+*.neon text eol=lf
+.htaccess text eol=lf
+
+# The vendored runtime is compared byte-for-byte with OpenEMR (runtime.sha256).
+public/assets/runtime/* -diff linguist-vendored
+public/assets/vendor/*  -diff linguist-vendored
+
+# Not part of a release archive (git archive / Composer dist)
+/.github            export-ignore
+/tests              export-ignore
+/.editorconfig      export-ignore
+/.gitattributes     export-ignore
+/phpcs.xml.dist     export-ignore
+/phpstan.neon.dist  export-ignore
+/package.json       export-ignore
+/package-lock.json  export-ignore

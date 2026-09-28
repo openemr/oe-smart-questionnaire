@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: Lint, coding standard, static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl
+          tools: composer
+          coverage: none
+
+      - name: Composer install
+        run: composer install --no-interaction --no-progress
+
+      - name: PHP syntax
+        run: composer lint
+
+      - name: Coding standard (PSR-12)
+        run: composer cs
+
+      - name: PHPStan (level 8)
+        run: composer stan
+
+      - name: Vendored OpenEMR runtime is unmodified
+        working-directory: public/assets/runtime
+        run: sha256sum --check runtime.sha256
+
+      - name: Every source file carries the OpenEMR license header
+        run: |
+          missing=$(find src public bin tests config.sample.php \
+            \( -name '*.php' -o -name '*.js' -o -name '*.css' \) \
+            -not -path 'public/assets/vendor/*' -not -path 'public/assets/runtime/*' \
+            -exec grep -L 'GNU General Public License 3' {} +)
+          if [ -n "$missing" ]; then echo "Missing license header:"; echo "$missing"; exit 1; fi
+
+  tests:
+    name: Tests (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.2', '8.3', '8.4', '8.5']
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl
+          coverage: none
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install jsdom (browser test)
+        run: npm ci
+
+      - name: Unit
+        run: php tests/unit.php
+
+      - name: End-to-end (mock OpenEMR) + browser
+        run: php tests/e2e.php
+
+  windows:
+    name: Tests (Windows, PHP 8.3)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl
+          coverage: none
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install jsdom (browser test)
+        run: npm ci
+
+      - name: Unit
+        run: php tests/unit.php
+
+      - name: End-to-end (mock OpenEMR) + browser
+        run: php tests/e2e.php

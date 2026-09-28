@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<ruleset name="oe-smart-questionnaire">
+    <description>PSR-12, as OpenEMR.</description>
+    <file>src</file>
+    <file>public</file>
+    <file>bin</file>
+    <file>tests</file>
+    <file>config.sample.php</file>
+    <exclude-pattern>public/assets/*</exclude-pattern>
+    <exclude-pattern>vendor/*</exclude-pattern>
+    <exclude-pattern>node_modules/*</exclude-pattern>
+    <arg name="extensions" value="php"/>
+    <arg name="colors"/>
+    <arg value="sp"/>
+    <rule ref="PSR12">
+        <!-- Entry points and test scripts declare and run code in the same file by design. -->
+        <exclude name="PSR1.Files.SideEffects"/>
+    </rule>
+    <rule ref="Generic.Files.LineLength">
+        <properties>
+            <property name="lineLimit" value="160"/>
+            <property name="absoluteLineLimit" value="0"/>
+        </properties>
+        <!-- Test scripts keep each assertion on one line for readable failure output. -->
+        <exclude-pattern>tests/*</exclude-pattern>
+    </rule>
+</ruleset>

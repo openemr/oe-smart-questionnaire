@@ -1,0 +1,22 @@
+# Local configuration and secrets — never commit
+/config.php
+/var/*
+!/var/.htaccess
+!/var/.gitkeep
+
+# Dependencies (dev tooling only; the app itself needs neither)
+/vendor/
+/node_modules/
+
+# Tool caches
+/.phpcs-cache
+/.phpunit.cache/
+/tmp/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,30 @@
+/**
+ * Styles for the questionnaire workspace and administration pages.
+ *
+ * @package   OpenEMR
+ * @link      https://www.open-emr.org
+ * @link      https://github.com/openemr/oe-smart-questionnaire
+ * @author    Jerry Padgett <sjpadgett@gmail.com>
+ * @copyright Copyright (c) 2026 Jerry Padgett <sjpadgett@gmail.com>
+ * @license   https://github.com/openemr/openemr/blob/master/LICENSE GNU General Public License 3
+ */
+
+body {
+  background: #f6f7f9;
+}
+
+.sq-banner {
+  background: #fff;
+}
+
+#sq-form {
+  max-width: 60rem;
+}
+
+#sq-fieldset:disabled .oe-questionnaire-runtime {
+  opacity: 0.85;
+}
+
+.active-response {
+  background: rgb(0 123 255 / 6%);
+}
