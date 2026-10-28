@@ -83,6 +83,33 @@ final class LaunchSession
         return is_string($id) && $id !== '' ? $id : null;
     }
 
+    /**
+     * OpenEMR version from the server's CapabilityStatement software, read once per launch.
+     * Empty when the server is not OpenEMR or does not say.
+     */
+    public function openemrVersion(): string
+    {
+        $cached = $this->record['openemr_version'] ?? null;
+        if (is_string($cached)) {
+            return $cached;
+        }
+        $version = '';
+        try {
+            $software = $this->fhir->capabilities()['software'] ?? null;
+            if (
+                is_array($software) && is_string($software['version'] ?? null)
+                && is_string($software['name'] ?? null) && stripos($software['name'], 'openemr') !== false
+            ) {
+                $version = trim($software['version']);
+            }
+        } catch (FhirException | \RuntimeException) {
+            // Not worth failing the workspace over; the runtime just omits the version tag.
+        }
+        $this->remember(['openemr_version' => $version]);
+
+        return $version;
+    }
+
     public function csrf(): string
     {
         return (string)($this->record['csrf'] ?? '');
