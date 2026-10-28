@@ -19,7 +19,9 @@ const path = require('path');
 const { JSDOM } = require('jsdom');
 
 const [html, publicDir] = process.argv.slice(2);
-const dom = new JSDOM(fs.readFileSync(html, 'utf8').replace(/<script src="[^"]*"><\/script>/g, ''), {
+const page = fs.readFileSync(html, 'utf8');
+const openemrVersion = (page.match(/<script src="[^"]*openemr_questionnaire\.js"[^>]*data-openemr-version="([^"]*)"/) || [])[1] || '';
+const dom = new JSDOM(page.replace(/<script src="[^"]*"[^>]*><\/script>/g, ''), {
     runScripts: 'outside-only',
     url: 'http://127.0.0.1/index.php',
 });
@@ -36,7 +38,12 @@ window.fetch = async (url, init) => {
     return { ok: true, status: 200, json: async () => ({ success: true, resource }) };
 };
 
+// The runtime reads its data-* attributes from document.currentScript while it evaluates.
+const runtimeTag = window.document.createElement('script');
+runtimeTag.dataset.openemrVersion = openemrVersion;
+Object.defineProperty(window.document, 'currentScript', { configurable: true, get: () => runtimeTag });
 window.eval(fs.readFileSync(path.join(publicDir, 'assets/runtime/openemr_questionnaire.js'), 'utf8'));
+Object.defineProperty(window.document, 'currentScript', { configurable: true, get: () => null });
 window.eval(fs.readFileSync(path.join(publicDir, 'assets/app.js'), 'utf8'));
 
 const $ = (id) => window.document.getElementById(id);
@@ -69,6 +76,7 @@ const check = (name, ok, detail = '') => {
     check('draft posts in-progress without id', draft?.status === 'in-progress' && draft.id === undefined, JSON.stringify(draft));
     check('csrf header sent', requests[0]?.headers['X-CSRF-Token'] !== undefined && requests[0].headers['X-CSRF-Token'] !== '');
     check('answer included', JSON.stringify(draft?.item || []).includes('valueBoolean'));
+    check('version tag stamped', openemrVersion !== '' && (draft?.meta?.tag || []).some((tag) => tag.code === 'openemrVersion: ' + openemrVersion), JSON.stringify(draft?.meta));
     check('dirty cleared after save', $('sq-dirty').hidden === true);
 
     $('sq-complete').click();
@@ -103,7 +111,7 @@ const check = (name, ok, detail = '') => {
             data.reviewOnly = true;
             return open + JSON.stringify(data).replace(/</g, '\\u003c') + close;
         }
-    ).replace(/<script src="[^"]*"><\/script>/g, '');
+    ).replace(/<script src="[^"]*"[^>]*><\/script>/g, '');
     const review = new JSDOM(reviewHtml, { runScripts: 'outside-only', url: 'http://127.0.0.1/index.php' });
     review.window.structuredClone = window.structuredClone;
     review.window.eval(fs.readFileSync(path.join(publicDir, 'assets/runtime/openemr_questionnaire.js'), 'utf8'));

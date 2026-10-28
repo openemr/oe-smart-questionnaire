@@ -256,7 +256,7 @@ $renderNotices($notices);
 
 <?php $jsonFlags = JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT; ?>
 <script type="application/json" id="sq-data"><?= json_encode($payload, $jsonFlags) ?></script>
-<script src="assets/runtime/openemr_questionnaire.js"></script>
+<script src="assets/runtime/openemr_questionnaire.js" data-openemr-version="<?= h($session->openemrVersion()) ?>"></script>
 <script src="assets/app.js"></script>
 <?php
 View::footer();

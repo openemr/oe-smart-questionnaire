@@ -15,6 +15,8 @@ First public release (planned as 1.0.0).
   - Standalone launch with OpenEMR's patient picker and a questionnaire picker.
 - **Questionnaire workspace**
   - Uses OpenEMR's native FHIR Questionnaire runtime (openemr/openemr#12880), vendored unmodified.
+  - Runtime re-synced from openemr/openemr `master` at `2ee0a6a` (#14744, merged): broader SDC/R4 item coverage, per-instance repeats, QuestionnaireResponse provenance tags and translatable runtime strings.
+  - The runtime script tag carries `data-openemr-version`, read once per launch from the server's CapabilityStatement `software.version`, so saved responses are tagged with the OpenEMR version.
   - Save draft, complete (with required-item validation) and amend.
   - Patient response history.
   - Unsaved-changes guard.

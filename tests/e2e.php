@@ -192,6 +192,7 @@ check('launch lands on workspace', $r['status'] === 200 && $data !== null, "HTTP
 check('questionnaire from context rendered', ($data['questionnaire']['id'] ?? null) === 'q1');
 check('patient banner shown', str_contains($r['body'], 'Ada Lovelace'));
 check('no scope warning when everything was granted', !str_contains($r['body'], 'The server did not grant'));
+check('runtime tag carries the OpenEMR version from metadata', str_contains($r['body'], 'data-openemr-version="8.1.0-mock"'));
 check('new response to start', is_array($data) && array_key_exists('initialResponseId', $data) && $data['initialResponseId'] === null);
 check('launch, aud and PKCE sent to authorize', (bool)preg_grep('~^GET /oauth/authorize\?.*launch=L1.*code_challenge_method=S256~', mockState($work)['log'])
     || (bool)preg_grep('~^GET /oauth/authorize\?(?=.*launch=L1)(?=.*aud=)(?=.*code_challenge_method=S256)~', mockState($work)['log']));

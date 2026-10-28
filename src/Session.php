@@ -29,12 +29,20 @@ final class Session
         if (session_status() === PHP_SESSION_ACTIVE) {
             return;
         }
-        $secure = str_starts_with(Config::appUrl(), 'https://');
-        $path = parse_url(Config::appUrl(), PHP_URL_PATH);
+        // Scope the cookie to the URL actually serving the request, not app_url: the app can
+        // also be reached at another path or over plain http (e.g. http://localhost/…/public/),
+        // where a Secure cookie for app_url's path is never sent back and every login is lost.
+        $plainHttp = empty($_SERVER['HTTPS']) || strtolower((string)$_SERVER['HTTPS']) === 'off';
+        $forwardedHttps = strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https';
+        $secure = str_starts_with(Config::appUrl(), 'https://') && (!$plainHttp || $forwardedHttps);
+        $scriptName = $_SERVER['SCRIPT_NAME'] ?? null;
+        $path = is_string($scriptName) && str_starts_with($scriptName, '/')
+            ? dirname($scriptName)
+            : parse_url(Config::appUrl(), PHP_URL_PATH);
         session_name('oe_smart_questionnaire');
         session_set_cookie_params([
             'lifetime' => 0,
-            'path' => (is_string($path) && $path !== '' ? rtrim($path, '/') : '') . '/',
+            'path' => (is_string($path) && $path !== '' ? rtrim(str_replace('\\', '/', $path), '/') : '') . '/',
             'secure' => $secure,
             'httponly' => true,
             // None requires Secure; fall back to Lax for plain-http local development.

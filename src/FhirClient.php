@@ -39,6 +39,16 @@ final class FhirClient
     }
 
     /**
+     * The server's CapabilityStatement (GET [base]/metadata).
+     *
+     * @return array<string, mixed>
+     */
+    public function capabilities(): array
+    {
+        return $this->send('GET', 'metadata');
+    }
+
+    /**
      * @param array<string, string> $params
      * @return list<array<string, mixed>>
      */

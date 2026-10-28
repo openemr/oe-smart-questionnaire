@@ -152,6 +152,11 @@ switch (true) {
             'scopes_supported' => [$advertised],
         ]);
         // no break: $json() exits
+    case $path === '/fhir/metadata':
+        // Public, as in OpenEMR; software.version comes from its composer.json.
+        $json(200, ['resourceType' => 'CapabilityStatement', 'status' => 'active', 'kind' => 'instance', 'fhirVersion' => '4.0.1',
+            'software' => ['name' => 'OpenEMR', 'version' => '8.1.0-mock']]);
+        // no break: $json() exits
     case $path === '/oauth/registration' && $method === 'POST':
         $body = json_decode((string)file_get_contents('php://input'), true);
         foreach (explode(' ', (string)($body['scope'] ?? '')) as $requested) {
