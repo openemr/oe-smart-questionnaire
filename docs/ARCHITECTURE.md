@@ -121,6 +121,16 @@ no launch URI. Under Patient App FHIR Writes *Confidential apps*, OpenEMR drops 
 write-only patient scopes at token time; `LaunchSession::patientGrantNotice()` explains that and
 `home.php` / `index.php` (`canSend`) turn read-only.
 
+`launch.php?mode=portal` is the patient portal client's launch URI (`Config::portalLaunchUri()`).
+OpenEMR's portal sends `launch`, `iss` and `aud` to it. The app uses the portal client
+(`Config::portalClientFor()`, stored under `portal` in the confidential client's record), asks for its
+`patient_scopes` (the patient scopes with `launch` in place of `launch/patient`, so the patient comes
+from the portal's launch), passes `launch` to authorize, and records the launch as `mode: patient`,
+`client_type: portal`. After sign-in it is a patient session like any other; `View::patientBar()`
+labels it *patient portal*. OpenEMR refuses the launch unless the signed-in patient is the one it
+names. `Registrar::registerPortal()` registers it as a confidential client (`application_type:
+private`, `client_secret_post`) with the portal launch URI.
+
 - `home.php` is the patient's landing page. What it offers follows the token
   (`LaunchSession::canCreate()` / `canRead()`): Home vital signs when the server grants
   Observation create or has the Home vital signs Questionnaire and grants QuestionnaireResponse

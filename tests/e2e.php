@@ -423,6 +423,55 @@ $r = http('POST', "{$app}/signout.php", $patientJar, http_build_query(['lid' => 
 check('sign out returns to the sign-in page', str_contains($r['url'], '/launch.php'));
 check('signed-out launch is gone', http('GET', "{$app}/home.php?" . http_build_query(['lid' => $lid]), $patientJar)['status'] === 401);
 
+// --- patient portal launch: OpenEMR's portal opens the portal client with the patient's launch ------
+[$code, $outText] = $cli('register.php', '--site=mock --portal');
+$clientsNow = json_decode((string)file_get_contents("{$work}/clients.json"), true);
+$portalClient = $clientsNow[$iss]['portal'] ?? [];
+check('--portal registers a patient portal client', $code === 0 && isset($portalClient['client_id'], $portalClient['client_secret'])
+    && str_contains($outText, 'launch.php?mode=portal'), $outText);
+$portalBody = end(mockState($work)['clients'])['body'] ?? [];
+check('portal client registered as private with the portal launch URI, launch and patient scopes only', ($portalBody['application_type'] ?? '') === 'private'
+    && ($portalBody['initiate_login_uri'] ?? '') === "{$app}/launch.php?mode=portal"
+    && str_contains(' ' . ($portalBody['scope'] ?? '') . ' ', ' launch ') && !str_contains($portalBody['scope'] ?? '', 'launch/patient')
+    && !str_contains($portalBody['scope'] ?? '', 'user/') && str_contains($portalBody['scope'] ?? '', 'patient/QuestionnaireResponse.cu'), json_encode($portalBody));
+[$code, $outText] = $cli('register.php', '--site=mock --check');
+check('--check confirms the patient portal client', str_contains($outText, 'Patient portal client confirmed'), $outText);
+[$code, $outText] = $cli('register.php', '--site=mock');
+$clientsNow = json_decode((string)file_get_contents("{$work}/clients.json"), true);
+check('re-registering the confidential client keeps the portal one', $code === 0
+    && ($clientsNow[$iss]['portal']['client_id'] ?? null) === ($portalClient['client_id'] ?? '?')
+    && ($clientsNow[$iss]['public']['client_id'] ?? null) === ($publicClient['client_id'] ?? '?'));
+
+$portalLaunch = static function (array $query) use ($app, $iss, $work, $patientJar): array {
+    setContext($work, ['consentFixed' => true, 'intent' => 'patient.portal']);
+    @unlink($patientJar);
+    $r = http('GET', "{$app}/launch.php?" . http_build_query(['mode' => 'portal', 'iss' => $iss] + $query), $patientJar);
+    parse_str((string)parse_url($r['url'], PHP_URL_QUERY), $q);
+    return [$r, (string)($q['lid'] ?? '')];
+};
+[$r] = $portalLaunch([]);
+check('portal launch URI without a launch explains where to open it', $r['status'] === 400
+    && str_contains($r['body'], 'Open this from your patient portal'), strip_tags(substr($r['body'], 0, 800)));
+[$r, $lid] = $portalLaunch(['launch' => 'Lportal']);
+$tokenRequest = mockState($work)['lastTokenRequest'] ?? [];
+check('portal launch lands on the patient home', str_contains($r['url'], '/home.php') && str_contains($r['body'], 'Ada Lovelace')
+    && str_contains($r['body'], 'patient portal'), $r['url'] . ' ' . strip_tags(substr($r['body'], 0, 1500)));
+check('portal launch sends the launch with the portal client', (bool)preg_grep(
+    '~^GET /oauth/authorize\?(?=.*launch=Lportal)(?=.*client_id=' . preg_quote((string)($portalClient['client_id'] ?? '?'), '~') . ')~',
+    mockState($work)['log']
+));
+check('portal launch exchanges the code with the portal client secret', ($tokenRequest['client_id'] ?? null) === ($portalClient['client_id'] ?? '?')
+    && ($tokenRequest['secret_sent'] ?? false) === true, json_encode($tokenRequest));
+[$page, $r] = $sendAnswer($lid);
+$saved = json_decode($r['body'], true)['resource'] ?? [];
+check('portal app sends, held for review', ($page['canSend'] ?? null) === true && $r['status'] === 200
+    && in_array('held-for-review', array_column($saved['meta']['tag'] ?? [], 'code'), true), $r['body']);
+[$code, $outText] = $cli('register.php', '--site=mock --forget-portal');
+check('--forget-portal removes the patient portal client', $code === 0
+    && !isset(json_decode((string)file_get_contents("{$work}/clients.json"), true)[$iss]['portal']), $outText);
+[$r] = $portalLaunch(['launch' => 'Lportal2']);
+check('portal launch without a portal client explains', $r['status'] === 400 && str_contains($r['body'], 'No patient portal client'));
+
 [$code, $outText] = $cli('register.php', '--site=mock --forget-public');
 check('--forget-public removes the public patient client', $code === 0
     && !isset(json_decode((string)file_get_contents("{$work}/clients.json"), true)[$iss]['public']), $outText);

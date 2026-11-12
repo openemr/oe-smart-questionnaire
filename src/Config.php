@@ -88,6 +88,15 @@ final class Config
     }
 
     /**
+     * The launch URI the patient portal client is registered with. OpenEMR's portal appends
+     * launch, iss and aud to it, so launch.php knows a portal launch from a staff EHR launch.
+     */
+    public static function portalLaunchUri(): string
+    {
+        return self::launchUri() . '?mode=portal';
+    }
+
+    /**
      * Whether a request's Host is app_url's host (and port). The sign-in state lives in a cookie
      * for the host the launch was opened on, but the server sends the browser back to app_url's
      * callback.php; opened on another name (https://localhost/… when app_url is a domain), the
@@ -171,6 +180,39 @@ final class Config
             unset($client['public']);
         } else {
             $client['public'] = $public;
+        }
+        self::saveClient($issuer, $client);
+    }
+
+    /**
+     * The patient portal client registered for this server (confidential, `launch` plus patient/
+     * scopes, launched from OpenEMR's patient portal), kept in the server's record under "portal".
+     * Null when none is registered.
+     *
+     * @return array<string, mixed>|null
+     */
+    public static function portalClientFor(string $issuer): ?array
+    {
+        $portal = self::clientFor($issuer)['portal'] ?? null;
+
+        return is_array($portal) && is_string($portal['client_id'] ?? null) && $portal['client_id'] !== '' ? $portal : null;
+    }
+
+    /**
+     * Saves (or with null, removes) the patient portal client for a registered server.
+     *
+     * @param array<string, mixed>|null $portal
+     */
+    public static function savePortalClient(string $issuer, ?array $portal): void
+    {
+        $client = self::clientFor($issuer);
+        if ($client === null) {
+            throw new RuntimeException("Register the confidential client for {$issuer} first.");
+        }
+        if ($portal === null) {
+            unset($client['portal']);
+        } else {
+            $client['portal'] = $portal;
         }
         self::saveClient($issuer, $client);
     }

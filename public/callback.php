@@ -45,11 +45,18 @@ if (!is_string($code) || $code === '') {
 }
 
 $isPublic = ($launch['client_type'] ?? null) === 'public';
-$client = $isPublic ? Config::publicClientFor((string)$launch['issuer']) : Config::clientFor((string)$launch['issuer']);
+$isPortal = ($launch['client_type'] ?? null) === 'portal';
+$client = match (true) {
+    $isPublic => Config::publicClientFor((string)$launch['issuer']),
+    $isPortal => Config::portalClientFor((string)$launch['issuer']),
+    default => Config::clientFor((string)$launch['issuer']),
+};
 if ($client === null) {
-    View::error(400, 'Authorization failed', $isPublic
-        ? 'The public patient client is no longer registered with this server.'
-        : 'This app is no longer registered with the launching server.');
+    View::error(400, 'Authorization failed', match (true) {
+        $isPublic => 'The public patient client is no longer registered with this server.',
+        $isPortal => 'The patient portal client is no longer registered with this server.',
+        default => 'This app is no longer registered with the launching server.',
+    });
 }
 
 try {
@@ -64,6 +71,9 @@ try {
     if ($isPublic && (stripos($message, 'client authentication failed') !== false || stripos($message, 'invalid_client') !== false)) {
         $message .= ' — the server did not accept the public patient client ' . $client['client_id']
             . '. Check that it is enabled in OpenEMR (Admin > System > API Clients), or register it again.';
+    } elseif ($isPortal && (stripos($message, 'client authentication failed') !== false || stripos($message, 'invalid_client') !== false)) {
+        $message .= ' — the server rejected the patient portal client ' . $client['client_id']
+            . '. Check that it is enabled in OpenEMR (Admin > System > API Clients); on the administration page, Check reports a secret mismatch.';
     } elseif (stripos($message, 'client authentication failed') !== false || stripos($message, 'invalid_client') !== false) {
         $message .= ' — the server rejected this app\'s client ID or secret for ' . $launch['issuer']
             . '. On the administration page, run Check for this site; it reports a secret mismatch and Repair secret fixes it.'

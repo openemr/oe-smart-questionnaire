@@ -41,6 +41,10 @@ native FHIR Questionnaire runtime from [openemr/openemr#12880](https://github.co
   as answers to the practice's *Home vital signs* questionnaire. Once a server grants
   `patient/Observation.cu`, the app sends the same readings as vital-sign Observations, with no
   change to the form.
+- **Patient portal launch.** With an OpenEMR that has the portal SMART launcher
+  ([openemr/openemr#7115](https://github.com/openemr/openemr/issues/7115)), patients open the app
+  from the portal's **Health Apps** tile and land on their home page. It uses a third, confidential
+  *patient portal* client (admin *Add portal client*, or `php bin/register.php --site=<name> --portal`).
 - **Draft, complete, amend.** The first save creates the QuestionnaireResponse and later saves update
   it, so one assessment never becomes duplicates. Required items are validated before completion,
   and finished responses reopen read-only with *Amend*.

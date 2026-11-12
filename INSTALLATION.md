@@ -300,6 +300,26 @@ For patients to *send* anything, in OpenEMR:
    only the patient scopes the server publishes at that moment, and **Check** says when they differ.
    Enable the new client. Register the public client again too (**Re-register public**).
 
+### Patient portal launch
+
+With an OpenEMR that has the portal SMART launcher
+([openemr/openemr#7115](https://github.com/openemr/openemr/issues/7115)), patients can also open the
+app from the patient portal's **Health Apps** tile.
+
+1. On the administration page, **Add portal client** for the server, or run
+   `php bin/register.php --site=<name> --portal`. This registers a third, confidential client with
+   `launch` and the patient scopes, and `https://<app_url>/launch.php?mode=portal` as its launch URI.
+2. Enable it in OpenEMR (**Admin > System > API Clients**). The portal lists only enabled clients
+   that have `launch` and patient/ scopes and no user/ or system/ scope.
+3. In the portal, the patient opens **Health Apps** and clicks **Launch**. The app opens in a new
+   window, the patient signs in with **Patient Login**, and lands on the same home page as patient
+   sign-in. The top bar says *patient portal*.
+
+OpenEMR gives the portal launch only to the patient it was made for, so it can't be used for anyone
+else's record. **Check** confirms the portal client; **Forget portal** (or `--forget-portal`) drops
+the app's copy. Register it again (**Re-register portal**) when Patient App FHIR Writes changes, as
+with the other clients.
+
 What patients send waits in **Miscellaneous > Patient App Submissions** until staff approve or deny
 it. Approved, it is in the chart under the same id, and the app shows it as *in your record*.
 Denied or withdrawn, it disappears from the app.
@@ -351,6 +371,9 @@ in different tabs.
 | Launch menu doesn't list the app | The client is disabled, or was registered without `launch`. Enable it under **API Clients**; re-register if its scopes are wrong. |
 | "Token request failed (HTTP 401): Client authentication failed" after approving the consent screen | OpenEMR rejected the app's client secret. Run **Check** for the site: it reads the registration back and reports whether the saved secret matches. **Repair secret** fixes a mismatch. If Check says OpenEMR can't decrypt the secret or no longer knows the client, register again and enable the new client. OpenEMR logs a mismatch as "Confidential client sent invalid client secret"; a decrypt failure is not logged. |
 | A patient signed in with the public app sees "You can look, but not send" | Patient App FHIR Writes is *Confidential apps*, so OpenEMR leaves a public client's write scopes out. Use the confidential patient sign-in, or set it to *Confidential and public apps*. |
+| "Portal launch unavailable" | No patient portal client is saved for that server. Use **Add portal client** on the administration page (or `php bin/register.php --site=<name> --portal`). |
+| "Open this from your patient portal" | Someone opened the portal launch URI directly. Patients open it from **Health Apps** in the portal, or use **Patient sign-in**. |
+| The portal shows no **Health Apps** tile | The FHIR API is off, or no portal client is enabled. Enable the portal client under **API Clients**; it must have `launch` and patient/ scopes only. |
 | "Public sign-in unavailable" | No public patient client is saved for that server. Use **Add public client** on the administration page (or `php bin/register.php --site=<name> --public`). |
 | `invalid_client` from OpenEMR | Client disabled, or `var/clients.json` holds an old client. **Check** on the admin page, then enable or re-register. |
 | Workspace says "…This client uses the v2 scope profile, which needs the OpenEMR consent-screen fix" | The site was registered with `v2` but its OpenEMR doesn't have the fix, so consent dropped the QuestionnaireResponse scopes. Re-register the site with `v1`, or install the OpenEMR fix. |

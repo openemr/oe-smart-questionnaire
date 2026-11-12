@@ -10,6 +10,13 @@ First public release (planned as 1.0.0).
 
 ### Added
 
+- **Patient portal launch** (`launch.php?mode=portal`), for OpenEMR's portal SMART launcher
+  (openemr/openemr#7115): the portal's **Health Apps** tile opens the app with the portal patient's
+  launch, and the patient lands on the same home page as patient sign-in, labeled *patient portal*.
+  - A third client per server, confidential, with `launch` and the patient scopes (`launch` in place
+    of `launch/patient`) and the portal launch URI: admin *Add portal client* / *Re-register portal* /
+    *Forget portal*, or `php bin/register.php --site=<name> --portal` / `--forget-portal`.
+  - Re-registering the confidential client keeps it; **Check** confirms it and its secret.
 - **Patient sign-in** (`launch.php?mode=patient`, OpenEMR's *Patient Login*), for OpenEMR's patient
   app writes (openemr/openemr#15138, #15144, #15162):
   - A home page with what the patient can do and what the server accepts: record home vital signs,

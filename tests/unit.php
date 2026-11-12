@@ -161,6 +161,20 @@ check('public client saved beside the confidential one', (Config::publicClientFo
     && (Config::clientFor('https://ehr.example/fhir')['client_id'] ?? null) === 'conf');
 Config::savePublicClient('https://ehr.example/fhir', null);
 check('public client forgotten, confidential kept', Config::publicClientFor('https://ehr.example/fhir') === null && Config::clientFor('https://ehr.example/fhir') !== null);
+// Patient portal client: launch in place of launch/patient, the portal launch URI, stored beside the others.
+check('portal scopes swap launch/patient for launch', Registrar::portalScopes('openid fhirUser launch/patient patient/Patient.rs launch')
+    === 'openid fhirUser launch patient/Patient.rs');
+$portalPayload = (new Registrar(new \OpenEMR\SmartQuestionnaire\HttpClient(false)))->portalPayload('n', 'c@example.org', 'openid launch patient/Patient.rs');
+check('portal payload: private, secret auth, portal launch URI', $portalPayload['application_type'] === 'private'
+    && $portalPayload['token_endpoint_auth_method'] === 'client_secret_post'
+    && $portalPayload['initiate_login_uri'] === 'https://app.example/launch.php?mode=portal'
+    && $portalPayload['launch_uris'] === ['https://app.example/launch.php?mode=portal']
+    && $portalPayload['redirect_uris'] === ['https://app.example/callback.php']);
+Config::savePortalClient('https://ehr.example/fhir', ['client_id' => 'portal', 'client_secret' => 'ps']);
+check('portal client saved beside the confidential one', (Config::portalClientFor('https://ehr.example/fhir/')['client_id'] ?? null) === 'portal'
+    && (Config::clientFor('https://ehr.example/fhir')['client_id'] ?? null) === 'conf');
+Config::savePortalClient('https://ehr.example/fhir', null);
+check('portal client forgotten, confidential kept', Config::portalClientFor('https://ehr.example/fhir') === null && Config::clientFor('https://ehr.example/fhir') !== null);
 @unlink(sys_get_temp_dir() . '/sq-unit-clients.json');
 $_SESSION = [];
 $grantFor = static function (string $clientType, string $granted): ?string {

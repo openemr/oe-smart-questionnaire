@@ -7,6 +7,9 @@
  *  - Standalone launch: launch.php?iss=<fhir base>   (staff sign in; the server shows its patient picker)
  *  - Patient sign-in:   launch.php?iss=<fhir base>&mode=patient   (the patient signs in with
  *                       OpenEMR's "Patient Login" and works on their own record)
+ *  - Portal launch:     launch.php?mode=portal&iss=<fhir base>&launch=<opaque>   (OpenEMR's
+ *                       patient portal opens the patient portal client; the patient signs in
+ *                       and works on their own record, as with patient sign-in)
  *  - No parameters:     lists the registered servers for a standalone launch or patient sign-in.
  *
  * @package   OpenEMR
@@ -107,8 +110,22 @@ if ($client === null) {
     View::error(400, 'Launch failed', "This app is not registered with {$issuer}.");
 }
 
-$isEhrLaunch = is_string($launch) && $launch !== '';
-$isPatientSignIn = !$isEhrLaunch && ($_GET['mode'] ?? null) === 'patient';
+$hasLaunch = is_string($launch) && $launch !== '';
+// A portal launch comes from OpenEMR's patient portal, to the portal client's launch URI.
+$isPortal = ($_GET['mode'] ?? null) === 'portal';
+if ($isPortal) {
+    $portalClient = Config::portalClientFor($issuer);
+    if (!$hasLaunch) {
+        View::error(400, 'Open this from your patient portal', 'This address is for the Health Apps list in the patient portal. '
+            . 'Open the app from there, or use Patient sign-in on ' . Config::launchUri() . '.');
+    }
+    if ($portalClient === null) {
+        View::error(400, 'Portal launch unavailable', "No patient portal client is registered with {$issuer}. "
+            . 'Register one on the administration page (Add portal client).');
+    }
+}
+$isEhrLaunch = $hasLaunch && !$isPortal;
+$isPatientSignIn = !$hasLaunch && ($_GET['mode'] ?? null) === 'patient';
 // Patient sign-in can go through the public patient client (no secret, PKCE only) instead.
 $isPublic = $isPatientSignIn && ($_GET['client'] ?? null) === 'public';
 if ($isPublic) {
@@ -128,8 +145,9 @@ $state = SmartClient::base64Url(random_bytes(32));
 $verifier = SmartClient::newVerifier();
 $launchId = LaunchStore::create([
     'issuer' => $issuer,
-    'mode' => $isEhrLaunch ? 'ehr' : ($isPatientSignIn ? 'patient' : 'standalone'),
-    'client_type' => $isPublic ? 'public' : 'confidential',
+    // A portal launch works like patient sign-in once the patient has signed in.
+    'mode' => $isEhrLaunch ? 'ehr' : ($isPatientSignIn || $isPortal ? 'patient' : 'standalone'),
+    'client_type' => $isPortal ? 'portal' : ($isPublic ? 'public' : 'confidential'),
     'smart_configuration' => $configuration,
     'verifier' => $verifier,
 ]);
@@ -148,6 +166,10 @@ if ($isPublic) {
     $scope = (string)($publicClient['patient_scopes'] ?? '');
     $clientId = (string)$publicClient['client_id'];
 }
+if ($isPortal) {
+    $scope = (string)($portalClient['patient_scopes'] ?? '');
+    $clientId = (string)$portalClient['client_id'];
+}
 LaunchStore::update($launchId, ['requested_scope' => $scope]);
 header('Location: ' . SmartClient::authorizeUrl(
     $configuration,
@@ -156,6 +178,6 @@ header('Location: ' . SmartClient::authorizeUrl(
     $scope,
     $state,
     $verifier,
-    $isEhrLaunch ? $launch : null
+    $hasLaunch ? $launch : null
 ));
 exit;

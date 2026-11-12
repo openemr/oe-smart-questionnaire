@@ -173,6 +173,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $flash('success', $lines);
                 break;
 
+            case 'register_portal':
+                if (!$validIssuer($issuer)) {
+                    throw new RuntimeException('Choose a site or enter a valid FHIR base URL.');
+                }
+                $record = $registrar->registerPortal($issuer, $siteName);
+                $lines = ["Registered the patient portal client for {$label}: {$record['client_id']}."];
+                if (isset($record['replaced_client_id'])) {
+                    $lines[] = "This replaces portal client {$record['replaced_client_id']}; disable it under Admin > System > API Clients.";
+                }
+                $lines[] = (string)$record['note'];
+                $flash('success', $lines);
+                break;
+
+            case 'forget_portal':
+                $portal = Config::portalClientFor($issuer);
+                Config::savePortalClient($issuer, null);
+                $flash('info', "Forgot the patient portal client for {$label}"
+                    . ($portal !== null ? " ({$portal['client_id']}). Disable it in OpenEMR if it is no longer used." : '.'));
+                break;
+
             case 'forget_public':
                 $public = Config::publicClientFor($issuer);
                 Config::savePublicClient($issuer, null);
@@ -238,6 +258,7 @@ $row = static function (string $name, string $issuer, ?array $client) use ($form
     $site = $name !== '' ? Sites::get($name) : null;
     $current = ScopeProfiles::forClient($client, $site)['profile'];
     $public = $client !== null ? Config::publicClientFor($issuer) : null;
+    $portal = $client !== null ? Config::portalClientFor($issuer) : null;
     $hasPatient = $client !== null && ScopeProfiles::forClient($client, $site)['patient'] !== '';
     $status = $client === null
         ? '<span class="badge badge-secondary">not registered</span>'
@@ -248,7 +269,11 @@ $row = static function (string $name, string $issuer, ?array $client) use ($form
             . ($public !== null
                 ? '<div class="small mt-1"><span class="badge badge-info">public patient client</span> <code>'
                     . h((string)$public['client_id']) . '</code></div>'
-                : '<div class="small text-muted mt-1">no public patient client</div>');
+                : '<div class="small text-muted mt-1">no public patient client</div>')
+            . ($portal !== null
+                ? '<div class="small mt-1"><span class="badge badge-info">patient portal client</span> <code>'
+                    . h((string)$portal['client_id']) . '</code></div>'
+                : '<div class="small text-muted mt-1">no patient portal client</div>');
     $actions = $client === null
         ? $form('register', $fields, 'Register', 'btn-primary', null, $profileSelect($current))
         : $form(
@@ -266,7 +291,7 @@ $row = static function (string $name, string $issuer, ?array $client) use ($form
                 $fields,
                 'Forget',
                 'btn-outline-danger',
-                'Remove the saved credentials for this site? The public patient client is forgotten too.'
+                'Remove the saved credentials for this site? The public and portal patient clients are forgotten too.'
             )
             . '<div class="mt-1">'
             . ($public === null
@@ -279,6 +304,17 @@ $row = static function (string $name, string $issuer, ?array $client) use ($form
                     'Register a new public patient client? OpenEMR keeps the current one until you disable it.'
                 )
                     . $form('forget_public', $fields, 'Forget public', 'btn-outline-danger', 'Remove the saved public patient client?'))
+            . '</div><div class="mt-1">'
+            . ($portal === null
+                ? $form('register_portal', $fields, 'Add portal client', 'btn-outline-info')
+                : $form(
+                    'register_portal',
+                    $fields,
+                    'Re-register portal',
+                    'btn-outline-info',
+                    'Register a new patient portal client? OpenEMR keeps the current one until you disable it.'
+                )
+                    . $form('forget_portal', $fields, 'Forget portal', 'btn-outline-danger', 'Remove the saved patient portal client?'))
             . '</div><div class="mt-1 small">Try: '
             . '<a href="launch.php?' . h(http_build_query(['iss' => $issuer])) . '">staff</a>'
             . ($hasPatient ? ' · <a href="launch.php?' . h(http_build_query(['iss' => $issuer, 'mode' => 'patient'])) . '">patient (confidential)</a>' : '')
@@ -314,10 +350,14 @@ unset($_SESSION['sq_flash']);
         <dl class="row mb-0">
             <dt class="col-sm-3">Launch URI</dt><dd class="col-sm-9"><code><?= h(Config::launchUri()) ?></code></dd>
             <dt class="col-sm-3">Redirect URI</dt><dd class="col-sm-9"><code><?= h(Config::redirectUri()) ?></code></dd>
+            <dt class="col-sm-3">Portal launch URI</dt><dd class="col-sm-9"><code><?= h(Config::portalLaunchUri()) ?></code>
+                <span class="text-muted">— the patient portal client's launch URI</span></dd>
             <dt class="col-sm-3">Client types</dt><dd class="col-sm-9">Confidential (client_secret_post) with PKCE S256, for EHR launch,
                 staff and patient sign-in. Optional <b>public patient client</b> per server (no secret, PKCE S256, patient/ scopes only):
                 <i>Add public client</i>. OpenEMR lets a public client send only when Patient App FHIR Writes is
-                "Confidential and public apps".</dd>
+                "Confidential and public apps". Optional <b>patient portal client</b> per server (confidential, <code>launch</code>
+                and patient/ scopes): <i>Add portal client</i>, then enable it in OpenEMR, and the patient portal lists it under
+                Health Apps.</dd>
         </dl>
         <table class="table table-sm table-borderless mb-0 mt-2">
             <thead><tr><th>Scope profile</th><th>Scopes registered</th></tr></thead>

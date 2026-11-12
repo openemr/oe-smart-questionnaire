@@ -78,6 +78,12 @@ final class LaunchSession
         return ($this->record['mode'] ?? null) === 'patient';
     }
 
+    /** A patient opened the app from OpenEMR's patient portal (launch.php?mode=portal). */
+    public function isPortalLaunch(): bool
+    {
+        return ($this->record['client_type'] ?? null) === 'portal';
+    }
+
     /** Signed in through the public patient client (no secret, PKCE only). */
     public function isPublicClient(): bool
     {

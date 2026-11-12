@@ -43,7 +43,7 @@ use OpenEMR\SmartQuestionnaire\Registrar;
 use OpenEMR\SmartQuestionnaire\Sites;
 
 $options = getopt('', ['iss:', 'site:', 'all', 'list', 'check', 'repair', 'scopes:', 'client-id:', 'client-secret:',
-    'registration-endpoint:', 'public', 'forget-public', 'help']);
+    'registration-endpoint:', 'public', 'forget-public', 'portal', 'forget-portal', 'help']);
 $options = is_array($options) ? $options : [];
 $usage = static function (int $code): never {
     $text = <<<TXT
@@ -52,6 +52,7 @@ Usage:
   php bin/register.php --all
   php bin/register.php --site=<name> | --iss=<FHIR base URL>  [--check | --repair] [--scopes=v1|v2] [--registration-endpoint=<url>]
   php bin/register.php --site=<name> | --iss=<FHIR base URL>  --public | --forget-public
+  php bin/register.php --site=<name> | --iss=<FHIR base URL>  --portal | --forget-portal
   php bin/register.php --site=<name> | --iss=<FHIR base URL>  --client-id=<id> [--client-secret=<secret>]
 
 TXT;
@@ -172,6 +173,32 @@ if (isset($options['forget-public'])) {
     Config::savePublicClient($issuer, null);
     fwrite(STDOUT, "✓ {$label}: forgot public patient client {$public['client_id']} — disable it in OpenEMR if unused
 ");
+    exit(0);
+}
+
+if (isset($options['portal'])) {
+    try {
+        $record = $registrar->registerPortal($issuer, $siteName, $endpointOverride);
+    } catch (Throwable $exception) {
+        fwrite(STDERR, '✗ ' . $exception->getMessage() . "\n");
+        exit(1);
+    }
+    fwrite(STDOUT, "✓ {$label}: patient portal client {$record['client_id']}\n"
+        . "  scopes: {$record['patient_scopes']}\n"
+        . "  launch URI: " . Config::portalLaunchUri() . "\n"
+        . "  note: {$record['note']}\n"
+        . (isset($record['replaced_client_id']) ? "  replaces {$record['replaced_client_id']} — disable the old client in OpenEMR\n" : ''));
+    exit(0);
+}
+
+if (isset($options['forget-portal'])) {
+    $portal = Config::portalClientFor($issuer);
+    if ($portal === null) {
+        fwrite(STDOUT, "- {$label}: no patient portal client saved\n");
+        exit(0);
+    }
+    Config::savePortalClient($issuer, null);
+    fwrite(STDOUT, "✓ {$label}: forgot patient portal client {$portal['client_id']} — disable it in OpenEMR if unused\n");
     exit(0);
 }
 

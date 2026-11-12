@@ -35,6 +35,10 @@ use RuntimeException;
  * gives a public client patient/ scopes only, enables one without launch automatically, and
  * lets it write only in the "Confidential and public apps" mode; in "Confidential apps" it
  * drops the write scopes from the token, and the app shows the patient a read-only home.
+ *
+ * A third, confidential client can be registered for the patient portal (registerPortal()):
+ * OpenEMR's portal lists it under Health Apps and launches it with the portal patient. It has
+ * `launch` and patient/ scopes only, and Config::portalLaunchUri() as its launch URI.
  */
 final class Registrar
 {
@@ -136,6 +140,106 @@ final class Registrar
             'response_types' => ['code'],
             'scope' => $scope,
         ];
+    }
+
+    /**
+     * The patient portal client: confidential, launched by OpenEMR's portal at portalLaunchUri().
+     * OpenEMR's portal offers a client with `launch`, a patient/ scope, no user/ or system/ scope
+     * and a launch URI.
+     *
+     * @return array<string, mixed>
+     */
+    public function portalPayload(string $clientName, string $contact, string $scope): array
+    {
+        return [
+            'application_type' => 'private',
+            'client_name' => $clientName,
+            'contacts' => [$contact],
+            'redirect_uris' => [Config::redirectUri()],
+            'post_logout_redirect_uris' => [Config::launchUri()],
+            'initiate_login_uri' => Config::portalLaunchUri(),
+            'launch_uris' => [Config::portalLaunchUri()],
+            'grant_types' => ['authorization_code'],
+            'response_types' => ['code'],
+            'token_endpoint_auth_method' => 'client_secret_post',
+            'scope' => $scope,
+        ];
+    }
+
+    /**
+     * Patient sign-in scopes for a portal launch: `launch` in place of `launch/patient`, so the
+     * server takes the patient from the portal's launch rather than its own patient context.
+     */
+    public static function portalScopes(string $patientScope): string
+    {
+        $scopes = preg_split('/\s+/', $patientScope, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $scopes = array_map(static fn(string $scope): string => $scope === 'launch/patient' ? 'launch' : $scope, $scopes);
+
+        return implode(' ', array_values(array_unique($scopes)));
+    }
+
+    public static function portalClientName(?string $siteName): string
+    {
+        return self::clientName($siteName) . ' - patient portal';
+    }
+
+    /**
+     * Registers the patient portal client for an already registered server and saves it in that
+     * server's record. Registering again replaces it (the old one stays in OpenEMR to disable).
+     *
+     * @return array<string, mixed>
+     */
+    public function registerPortal(string $issuer, ?string $siteName, ?string $registrationEndpoint = null): array
+    {
+        $issuer = Config::normalizeIssuer($issuer);
+        $confidential = Config::clientFor($issuer);
+        if ($confidential === null) {
+            throw new RuntimeException("Register the confidential client for {$issuer} first; the patient portal client is kept beside it.");
+        }
+        $siteName ??= is_string($confidential['site'] ?? null) ? $confidential['site'] : null;
+        $configuration = (new SmartClient($this->http))->discover($issuer);
+        $advertised = ScopeCheck::advertised($configuration);
+        $patientScope = ScopeProfiles::patientScopesFor($advertised);
+        if ($patientScope === null) {
+            throw new RuntimeException('Not registered: ' . self::patientNote(''));
+        }
+        if ($advertised !== null && !in_array('launch', $advertised, true)) {
+            throw new RuntimeException('Not registered: the server does not publish the launch scope.');
+        }
+        $portalScope = self::portalScopes($patientScope);
+        $clientName = self::portalClientName($siteName);
+        $decoded = $this->post(
+            self::registrationEndpoint($configuration, $registrationEndpoint),
+            $this->portalPayload($clientName, self::contact(), $portalScope)
+        );
+        $previous = Config::portalClientFor($issuer);
+        $record = array_filter([
+            'client_id' => $decoded['client_id'],
+            'client_secret' => $decoded['client_secret'] ?? null,
+            'client_name' => $clientName,
+            'token_endpoint_auth_method' => 'client_secret_post',
+            'registration_access_token' => $decoded['registration_access_token'] ?? null,
+            'registration_client_uri' => $decoded['registration_client_uri'] ?? null,
+            'registered' => gmdate('c'),
+            'replaced_client_id' => $previous['client_id'] ?? null,
+            'patient_scopes' => $portalScope,
+        ], static fn($value) => $value !== null && $value !== '');
+        Config::savePortalClient($issuer, $record);
+        $record['note'] = self::portalNote($portalScope);
+
+        return $record;
+    }
+
+    /** What the portal client needs before patients see it. */
+    public static function portalNote(string $portalScope): string
+    {
+        $canWrite = str_contains(' ' . $portalScope . ' ', ' patient/QuestionnaireResponse.cu ');
+
+        return 'Patient portal client registered. Enable it in OpenEMR (Admin > System > API Clients); the patient portal '
+            . 'then shows it under Health Apps. It needs an OpenEMR with the portal SMART launcher (openemr/openemr#7115). '
+            . ($canWrite
+                ? 'Patients who open it can send questionnaires and home vital signs, held for staff review.'
+                : 'The server offers no patient write scopes now, so patients can read only.');
     }
 
     public static function publicClientName(?string $siteName): string
@@ -307,8 +411,9 @@ final class Registrar
             'ehr_scopes' => $profile['ehr'],
             'standalone_scopes' => $profile['standalone'],
             'patient_scopes' => $patientScope,
-            // The public patient client is a separate registration; re-registering this one keeps it.
+            // The public and portal patient clients are separate registrations; re-registering this one keeps them.
             'public' => $previous['public'] ?? null,
+            'portal' => $previous['portal'] ?? null,
         ], static fn($value) => $value !== null && $value !== '');
         Config::saveClient($issuer, $record);
         $notes = $merges !== [] ? [self::consentFixNote($merges)] : [];
@@ -431,6 +536,7 @@ final class Registrar
             'ehr_scopes' => $profile['ehr'],
             'standalone_scopes' => $profile['standalone'],
             'public' => Config::clientFor($issuer)['public'] ?? null,
+            'portal' => Config::clientFor($issuer)['portal'] ?? null,
         ], static fn($value) => $value !== null && $value !== '');
         Config::saveClient($issuer, $record);
 
@@ -532,9 +638,47 @@ final class Registrar
                 . Config::redirectUri() . ' (app_url changed?). Re-register.';
         }
         array_push($lines, ...$this->verifyPublic($issuer, $ok));
+        array_push($lines, ...$this->verifyPortal($issuer, $ok));
         $lines[] = 'Whether they are enabled is only visible in the EHR (OpenEMR: Admin > System > API Clients).';
 
         return ['ok' => $ok, 'lines' => $lines];
+    }
+
+    /**
+     * Lines about the patient portal client; clears $ok on a problem.
+     *
+     * @return list<string>
+     */
+    private function verifyPortal(string $issuer, bool &$ok): array
+    {
+        $portal = Config::portalClientFor($issuer);
+        if ($portal === null) {
+            return ['Patient portal client: not registered (optional; register it to launch the app from the patient portal).'];
+        }
+        if (!is_string($portal['registration_client_uri'] ?? null) || !is_string($portal['registration_access_token'] ?? null)) {
+            return ['Patient portal client ' . $portal['client_id'] . ': its registration cannot be read back.'];
+        }
+        $read = $this->readRegistration($portal);
+        if ($read['error'] !== null) {
+            $ok = false;
+            return ['Patient portal client: ' . $read['error']];
+        }
+        $server = $read['registration'];
+        $lines = ['Patient portal client confirmed: ' . $portal['client_id'] . ' — ' . (string)($portal['patient_scopes'] ?? '')];
+        $serverSecret = $server['client_secret'] ?? null;
+        $savedSecret = $portal['client_secret'] ?? null;
+        if (is_string($serverSecret) && $serverSecret !== '' && (!is_string($savedSecret) || !hash_equals($serverSecret, $savedSecret))) {
+            $ok = false;
+            $lines[] = 'The patient portal client\'s saved secret does not match the server\'s. Register the portal client again.';
+        }
+        $redirects = is_array($server['redirect_uris'] ?? null) ? $server['redirect_uris'] : [];
+        if ($redirects !== [] && !in_array(Config::redirectUri(), $redirects, true)) {
+            $ok = false;
+            $lines[] = 'The patient portal client has redirect URI ' . implode(', ', $redirects) . ' but this app now uses '
+                . Config::redirectUri() . '. Register it again.';
+        }
+
+        return $lines;
     }
 
     /**

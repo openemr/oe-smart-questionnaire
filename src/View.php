@@ -91,9 +91,12 @@ final class View
     public static function patientBar(LaunchSession $session, string $patientName, bool $onHome, string $meta = ''): string
     {
         $host = (string)(parse_url((string)$session->record['issuer'], PHP_URL_HOST) ?: '');
-        $kind = $session->isPublicClient()
-            ? '<span class="badge badge-light border" title="Signed in with the public patient client: no secret, PKCE only">public app</span>'
-            : '<span class="badge badge-light border" title="Signed in with the confidential client: this app holds a client secret">confidential app</span>';
+        [$title, $label] = match (true) {
+            $session->isPortalLaunch() => ['Opened from your patient portal', 'patient portal'],
+            $session->isPublicClient() => ['Signed in with the public patient client: no secret, PKCE only', 'public app'],
+            default => ['Signed in with the confidential client: this app holds a client secret', 'confidential app'],
+        };
+        $kind = '<span class="badge badge-light border" title="' . h($title) . '">' . h($label) . '</span>';
 
         return '<nav class="sq-banner sq-patient-bar border rounded px-3 py-2 mb-3 d-flex flex-wrap align-items-center justify-content-between">'
             . '<div class="mr-3"><strong>' . h($patientName) . '</strong>'
