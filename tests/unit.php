@@ -15,6 +15,9 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/src/bootstrap.php';
 
+use OpenEMR\SmartQuestionnaire\Config;
+use OpenEMR\SmartQuestionnaire\HomeVitals;
+use OpenEMR\SmartQuestionnaire\LaunchSession;
 use OpenEMR\SmartQuestionnaire\Refs;
 use OpenEMR\SmartQuestionnaire\Registrar;
 use OpenEMR\SmartQuestionnaire\ScopeCheck;
@@ -22,6 +25,7 @@ use OpenEMR\SmartQuestionnaire\ScopeProfiles;
 use OpenEMR\SmartQuestionnaire\Sites;
 use OpenEMR\SmartQuestionnaire\ResponseStamper;
 use OpenEMR\SmartQuestionnaire\SmartClient;
+use OpenEMR\SmartQuestionnaire\View;
 
 $failures = 0;
 $count = 0;
@@ -139,6 +143,45 @@ file_put_contents($tmpConfig, '<?php return ["app_url" => "https://app.example",
     . var_export(sys_get_temp_dir() . '/sq-unit-clients.json', true)
     . ', "sites" => ["a" => "https://ehr.example/openemr", "b" => ["url" => "https://ehr2.example/fhir", "scope_profile" => "v2"]]];');
 putenv("SQ_CONFIG={$tmpConfig}");
+check('app host: same host matches', Config::isAppHost('app.example') && Config::isAppHost('APP.example:443'));
+check('app host: another name or port does not', !Config::isAppHost('localhost') && !Config::isAppHost('app.example:8443'));
+check('app host: no Host header is left alone', Config::isAppHost(null) && Config::isAppHost(''));
+// Public patient client: payload, storage beside the confidential client, and what a patient is told.
+check('scope writes: c/u and v1 write only', ScopeCheck::writes(['patient/QuestionnaireResponse.cu', 'patient/Patient.rs', 'user/X.write', 'openid', 'patient/Y.c'])
+    === ['patient/QuestionnaireResponse.cu', 'user/X.write', 'patient/Y.c']);
+$publicPayload = (new Registrar(new \OpenEMR\SmartQuestionnaire\HttpClient(false)))->publicPayload('n', 'c@example.org', 'openid launch/patient patient/Patient.rs');
+check('public payload: application_type public, no auth method, no launch URI', $publicPayload['application_type'] === 'public'
+    && !isset($publicPayload['token_endpoint_auth_method']) && !isset($publicPayload['initiate_login_uri'])
+    && $publicPayload['redirect_uris'] === ['https://app.example/callback.php']);
+@unlink(sys_get_temp_dir() . '/sq-unit-clients.json');
+check('public client needs the confidential record first', throws(fn() => Config::savePublicClient('https://ehr.example/fhir', ['client_id' => 'pub'])) !== null);
+Config::saveClient('https://ehr.example/fhir', ['client_id' => 'conf', 'client_secret' => 's']);
+Config::savePublicClient('https://ehr.example/fhir/', ['client_id' => 'pub', 'patient_scopes' => 'openid patient/Patient.rs']);
+check('public client saved beside the confidential one', (Config::publicClientFor('https://ehr.example/fhir')['client_id'] ?? null) === 'pub'
+    && (Config::clientFor('https://ehr.example/fhir')['client_id'] ?? null) === 'conf');
+Config::savePublicClient('https://ehr.example/fhir', null);
+check('public client forgotten, confidential kept', Config::publicClientFor('https://ehr.example/fhir') === null && Config::clientFor('https://ehr.example/fhir') !== null);
+@unlink(sys_get_temp_dir() . '/sq-unit-clients.json');
+$_SESSION = [];
+$grantFor = static function (string $clientType, string $granted): ?string {
+    $lid = \OpenEMR\SmartQuestionnaire\LaunchStore::create([
+        'issuer' => 'https://ehr.example/fhir', 'mode' => 'patient', 'client_type' => $clientType,
+        'requested_scope' => 'openid fhirUser launch/patient patient/Patient.rs patient/QuestionnaireResponse.rs patient/QuestionnaireResponse.cu',
+        'token' => ['access_token' => 't', 'patient' => 'p1', 'scope' => $granted], 'expires_at' => time() + 600,
+    ]);
+    $session = LaunchSession::resolve($lid);
+    return $session instanceof LaunchSession ? $session->patientGrantNotice() : 'unresolved';
+};
+$allGranted = 'openid patient/Patient.rs patient/QuestionnaireResponse.rs patient/QuestionnaireResponse.cu';
+$readOnly = 'openid patient/Patient.rs patient/QuestionnaireResponse.rs';
+check('grant notice: none when everything was granted', $grantFor('public', $allGranted) === null);
+check('grant notice: public without writes points to the confidential sign-in', str_contains((string)$grantFor('public', $readOnly), 'confidential patient sign-in'));
+check('grant notice: confidential without writes says sign in again', str_contains((string)$grantFor('confidential', $readOnly), 'Sign in again'));
+check('grant notice: a dropped read is named', str_contains((string)$grantFor('confidential', 'patient/QuestionnaireResponse.rs patient/QuestionnaireResponse.cu'), 'patient/Patient.rs'));
+$noon = (int)strtotime('2026-11-12 12:00:00');
+check('when: today, yesterday and older', View::when('2026-11-12T09:05:00', $noon) === 'Today 9:05 am'
+    && View::when('2026-11-11T21:30:00', $noon) === 'Yesterday 9:30 pm' && View::when('2026-03-03', $noon) === 'Mar 3, 2026');
+check('when: unreadable value returned as is', View::when('soon', $noon) === 'soon' && View::when('', $noon) === '');
 check('default profile is v1', ScopeProfiles::defaultName() === 'v1');
 check('v1 uses QuestionnaireResponse .read/.write', str_contains(ScopeProfiles::get('v1')['ehr'], 'user/QuestionnaireResponse.read user/QuestionnaireResponse.write'));
 check('v2 uses QuestionnaireResponse .rs/.cu', str_contains(ScopeProfiles::get('v2')['ehr'], 'user/QuestionnaireResponse.rs user/QuestionnaireResponse.cu'));
@@ -153,6 +196,73 @@ check('stored client scopes win over site profile', $stored['ehr'] === 'openid l
 check('legacy client record falls back to site profile', ScopeProfiles::forClient(['client_id' => 'x'], Sites::get('b'))['profile'] === 'v2');
 check('unknown profile rejected', throws(fn() => ScopeProfiles::get('v9')) !== null);
 check('explicit profile beats site profile', Registrar::resolveProfile('v1', 'b') === 'v1' && Registrar::resolveProfile(null, 'b') === 'v2');
+
+// Patient sign-in scopes: only what the server publishes, and nothing without the essentials.
+$offeredToday = ['openid', 'fhirUser', 'launch', 'launch/patient', 'patient/Patient.rs', 'patient/Questionnaire.rs',
+    'patient/QuestionnaireResponse.rs', 'patient/QuestionnaireResponse.cu', 'patient/Observation.rs', 'patient/Condition.rs'];
+$patientScope = ScopeProfiles::patientScopesFor($offeredToday);
+check('patient scopes keep published QR write', is_string($patientScope) && str_contains($patientScope, 'patient/QuestionnaireResponse.cu'));
+check('patient scopes drop unpublished Observation write', is_string($patientScope) && !str_contains($patientScope, 'patient/Observation.cu'));
+check('patient scopes drop unpublished AllergyIntolerance read', is_string($patientScope) && !str_contains($patientScope, 'patient/AllergyIntolerance.rs'));
+check('patient scopes keep openid and fhirUser', is_string($patientScope) && str_starts_with($patientScope, 'openid fhirUser launch/patient'));
+check('patient scopes pick up Observation write once published', str_contains((string)ScopeProfiles::patientScopesFor([...$offeredToday, 'patient/Observation.cu']), 'patient/Observation.cu'));
+check('no patient sign-in without launch/patient', ScopeProfiles::patientScopesFor(['openid', 'patient/Patient.rs']) === null);
+check('no patient sign-in when scopes are unpublished', ScopeProfiles::patientScopesFor(null) === null);
+check('legacy client has no patient scopes', ScopeProfiles::forClient(['client_id' => 'x'], null)['patient'] === '');
+check('union takes three scope strings', ScopeProfiles::union('a b', 'b c', 'c d') === 'a b c d');
+check('patient note without writes says how to turn them on', str_contains(Registrar::patientNote('openid launch/patient patient/Patient.rs'), 'Patient App FHIR Writes'));
+check('patient note with QR write', str_contains(Registrar::patientNote('launch/patient patient/Patient.rs patient/QuestionnaireResponse.cu'), 'held for staff review'));
+
+// Held writes: OpenEMR's held-for-review tag.
+check('held tag recognized', LaunchSession::isHeld(['meta' => ['tag' => [['system' => LaunchSession::HELD_TAG_SYSTEM, 'code' => 'held-for-review']]]]));
+check('other tags are not held', !LaunchSession::isHeld(['meta' => ['tag' => [['system' => 'http://x', 'code' => 'held-for-review']]]]));
+check('no meta is not held', !LaunchSession::isHeld(['resourceType' => 'QuestionnaireResponse']));
+
+// Home vital signs: the bundled definition and the answers -> Observations mapping.
+$homeVitals = HomeVitals::bundled();
+check('bundled Home vital signs has its url', ($homeVitals['url'] ?? null) === HomeVitals::URL && ($homeVitals['title'] ?? null) === HomeVitals::TITLE);
+check('Home vitals is known by its identifier when the server replaced the url', HomeVitals::identifies([
+    'title' => HomeVitals::TITLE, 'url' => 'https://ehr.example/fhir/Questionnaire/abc',
+    'identifier' => [['system' => HomeVitals::IDENTIFIER_SYSTEM, 'value' => HomeVitals::URL]],
+]));
+check('Home vitals needs its title as well', !HomeVitals::identifies(['title' => 'Other', 'url' => HomeVitals::URL]));
+check('a questionnaire titled Home vital signs without the canonical is not it', !HomeVitals::identifies(['title' => HomeVitals::TITLE, 'url' => 'https://ehr.example/fhir/Questionnaire/abc']));
+check('bundled Home vital signs carries the canonical identifier', HomeVitals::identifies(array_diff_key($homeVitals, ['url' => 1])));
+check('excerpt keeps a short description', View::excerpt('Short.') === 'Short.');
+check('excerpt takes the first paragraph', View::excerpt("First line.
+Second line.") === 'First line.');
+check('excerpt cuts a long paragraph at a word', ($e = View::excerpt(str_repeat('word ', 60))) !== '' && mb_strlen($e) <= 161 && str_ends_with($e, '…') && !str_contains($e, 'wor…'));
+$explorerSeeds = dirname(__DIR__, 2) . '/openemr/devtools/oe-module-api-explorer/patient_write_seeds.php';
+if (is_file($explorerSeeds)) {
+    check('bundled Home vital signs matches the API Explorer seed', (require $explorerSeeds)['homeVitals'] == $homeVitals);
+}
+$readings = [
+    'resourceType' => 'QuestionnaireResponse',
+    'item' => [
+        ['linkId' => 'taken', 'answer' => [['valueDateTime' => '2026-11-10T08:30:00-05:00']]],
+        ['linkId' => 'bp', 'item' => [
+            ['linkId' => 'bp-systolic', 'answer' => [['valueInteger' => 128]]],
+            ['linkId' => 'bp-diastolic', 'answer' => [['valueInteger' => 82]]],
+        ]],
+        ['linkId' => 'heart-rate', 'answer' => [['valueInteger' => 70]]],
+        ['linkId' => 'weight', 'answer' => [['valueDecimal' => 180.5]]],
+        ['linkId' => 'notes', 'answer' => [['valueString' => 'after my walk']]],
+    ],
+];
+$observations = HomeVitals::toObservations($homeVitals, $readings, 'p1');
+$byCode = [];
+foreach ($observations as $observation) {
+    $byCode[$observation['code']['coding'][0]['code']] = $observation;
+}
+check('vitals: one Observation per reading, BP as one panel', count($observations) === 3 && isset($byCode['85354-9'], $byCode['8867-4'], $byCode['29463-7']));
+check('vitals: BP components systolic/diastolic', array_map(static fn($c) => $c['code']['coding'][0]['code'] . '=' . $c['valueQuantity']['value'], $byCode['85354-9']['component'] ?? []) === ['8480-6=128', '8462-4=82']);
+check('vitals: UCUM unit from the item', ($byCode['29463-7']['valueQuantity']['code'] ?? null) === '[lb_av]' && ($byCode['29463-7']['valueQuantity']['system'] ?? null) === 'http://unitsofmeasure.org');
+check('vitals: effective from "taken"', ($byCode['8867-4']['effectiveDateTime'] ?? null) === '2026-11-10T08:30:00-05:00');
+check('vitals: vital-signs category, preliminary, the patient', ($byCode['8867-4']['category'][0]['coding'][0]['code'] ?? null) === 'vital-signs'
+    && $byCode['8867-4']['status'] === 'preliminary' && $byCode['8867-4']['subject']['reference'] === 'Patient/p1');
+check('vitals: the note rides on one Observation', count(array_filter($observations, static fn($o) => isset($o['note']))) === 1);
+check('vitals: nothing entered is refused', throws(fn() => HomeVitals::toObservations($homeVitals, ['item' => [['linkId' => 'taken', 'answer' => [['valueDateTime' => '2026-11-10']]]]], 'p1')) !== null);
+check('vitals: a lone systolic still makes the panel', count(HomeVitals::toObservations($homeVitals, ['item' => [['linkId' => 'bp', 'item' => [['linkId' => 'bp-systolic', 'answer' => [['valueInteger' => 120]]]]]]], 'p1')) === 1);
 @unlink($tmpConfig);
 
 echo ($failures === 0 ? "OK" : "FAILED") . " ({$count} checks, {$failures} failures)\n";

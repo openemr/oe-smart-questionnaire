@@ -45,7 +45,9 @@ $b64u = static fn(string $bytes) => rtrim(strtr(base64_encode($bytes), '+/', '-_
 $advertised = ['openid', 'fhirUser', 'launch', 'launch/patient', 'offline_access',
     'user/Patient.rs', 'user/Patient.cud', 'user/Questionnaire.rs', 'user/Questionnaire.cud',
     'user/QuestionnaireResponse.rs', 'user/QuestionnaireResponse.cud',
-    'user/QuestionnaireResponse.read', 'user/QuestionnaireResponse.write'];
+    'user/QuestionnaireResponse.read', 'user/QuestionnaireResponse.write',
+    // Patient sign-in, as OpenEMR publishes it with Patient App FHIR Writes on (QuestionnaireResponse).
+    'patient/Patient.rs', 'patient/Questionnaire.rs', 'patient/QuestionnaireResponse.rs', 'patient/QuestionnaireResponse.cu'];
 $perms = static fn(string $scope): string => ['read' => 'rs', 'write' => 'cud'][preg_replace('~^.*\.~', '', $scope)] ?? preg_replace('~^.*\.~', '', $scope);
 /**
  * OpenEMR consent emulation: one card per context/resource; v1 cards come back as separate
@@ -108,7 +110,7 @@ $consent = static function (array $requested, array $deny, bool $consentFixed = 
 };
 $tokenAllows = static function (array $granted, string $permission) use ($perms): bool {
     foreach ($granted as $scope) {
-        if (str_starts_with($scope, 'user/QuestionnaireResponse.') && str_contains($perms($scope), $permission)) {
+        if (preg_match('~^(user|patient)/QuestionnaireResponse\.~', $scope) === 1 && str_contains($perms($scope), $permission)) {
             return true;
         }
     }
@@ -165,18 +167,23 @@ switch (true) {
                     'hint' => "Check the `{$requested}` scope", 'message' => 'The requested scope is invalid, unknown, or malformed']);
             }
         }
+        // Like OpenEMR: only application_type private gets a secret; a public client gets patient/ scopes only.
+        $isPublic = ($body['application_type'] ?? '') !== 'private';
+        if ($isPublic && preg_match('~(^|\s)(user|system)/~', (string)($body['scope'] ?? '')) === 1) {
+            $json(400, ['error' => 'invalid_client_metadata', 'error_description' => 'system and user scopes are only allowed for confidential clients']);
+        }
         $id = 'client-' . (++$state['seq']);
-        $state['clients'][$id] = ['secret' => 'secret-' . $id, 'redirect_uris' => $body['redirect_uris'] ?? [], 'body' => $body, 'reg_token' => 'rt-' . $id];
-        $json(201, ['client_id' => $id, 'client_secret' => 'secret-' . $id, 'registration_access_token' => 'rt-' . $id,
-            'registration_client_uri' => $base . '/oauth/client/' . $id]);
+        $state['clients'][$id] = ['secret' => $isPublic ? null : 'secret-' . $id, 'redirect_uris' => $body['redirect_uris'] ?? [], 'body' => $body, 'reg_token' => 'rt-' . $id];
+        $json(201, array_filter(['client_id' => $id, 'client_secret' => $isPublic ? null : 'secret-' . $id, 'registration_access_token' => 'rt-' . $id,
+            'registration_client_uri' => $base . '/oauth/client/' . $id]));
         // no break: $json() exits
     case preg_match('~^/oauth/client/([\w-]+)$~', $path, $cm) === 1:
         $client = $state['clients'][$cm[1]] ?? null;
         if ($client === null || ($_SERVER['HTTP_AUTHORIZATION'] ?? '') !== 'Bearer ' . $client['reg_token']) {
             $json(403, ['error' => 'invalid_request']);
         }
-        $json(200, ['client_id' => $cm[1], 'client_secret' => $client['secret'], 'client_name' => $client['body']['client_name'] ?? '',
-            'application_type' => 'user', 'redirect_uris' => $client['redirect_uris']]);
+        $json(200, array_filter(['client_id' => $cm[1], 'client_secret' => $client['secret'], 'client_name' => $client['body']['client_name'] ?? '',
+            'application_type' => $client['secret'] === null ? 'patient' : 'user', 'redirect_uris' => $client['redirect_uris']]));
         // no break: $json() exits
     case $path === '/oauth/authorize':
         $client = $state['clients'][$_GET['client_id'] ?? ''] ?? null;
@@ -187,10 +194,15 @@ switch (true) {
             $json(400, ['error' => 'invalid_request', 'error_description' => 'bad aud or PKCE']);
         }
         $code = bin2hex(random_bytes(8));
+        $grantedScopes = $consent(explode(' ', (string)($_GET['scope'] ?? '')), $context['denyScopes'] ?? [], !empty($context['consentFixed']));
+        // Patient App FHIR Writes "Confidential apps": a public client's write-only patient scopes are dropped.
+        if ($client['secret'] === null && ($context['writeMode'] ?? 'confidential_public') === 'confidential') {
+            $grantedScopes = array_values(array_filter($grantedScopes, static fn($scope) => preg_match('~^patient/\w+\.[cu]+$~', $scope) !== 1));
+        }
         $state['codes'][$code] = [
             'client_id' => $_GET['client_id'], 'challenge' => $_GET['code_challenge'],
             'redirect_uri' => $_GET['redirect_uri'], 'launch' => $_GET['launch'] ?? null,
-            'scope' => implode(' ', $consent(explode(' ', (string)($_GET['scope'] ?? '')), $context['denyScopes'] ?? [], !empty($context['consentFixed']))),
+            'scope' => implode(' ', $grantedScopes),
         ];
         $save();
         header('Location: ' . $_GET['redirect_uri'] . '?' . http_build_query(['code' => $code, 'state' => $_GET['state'] ?? '']));
@@ -200,6 +212,11 @@ switch (true) {
         $grant = $state['codes'][$_POST['code'] ?? ''] ?? null;
         unset($state['codes'][$_POST['code'] ?? '']);
         $client = $grant ? ($state['clients'][$grant['client_id']] ?? null) : null;
+        $state['lastTokenRequest'] = ['client_id' => $_POST['client_id'] ?? null, 'secret_sent' => isset($_POST['client_secret'])];
+        if ($client !== null && $client['secret'] === null) {
+            // Public client: PKCE alone; a secret is never expected.
+            $client['secret'] = $_POST['client_secret'] ?? '';
+        }
         if (
             $grant === null || $client === null
             || ($_POST['client_secret'] ?? '') !== $client['secret']
@@ -261,6 +278,10 @@ if ($path === '/fhir/QuestionnaireResponse' && $method === 'POST') {
     $validate($body);
     $id = 'qr' . (++$state['seq']);
     $body['id'] = $id;
+    if (preg_grep('~^patient/~', $granted)) {
+        // A patient app's write is held for staff review, and tagged so.
+        $body['meta']['tag'][] = ['system' => 'http://open-emr.org/fhir/CodeSystem/patient-write', 'code' => 'held-for-review'];
+    }
     $state['responses'][$id] = $body;
     // Like OpenEMR, answer a create with an id stub rather than the resource.
     $json(201, ['uuid' => $id], ['Location' => $base . '/fhir/QuestionnaireResponse/' . $id . '/_history/1']);

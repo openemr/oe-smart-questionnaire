@@ -27,7 +27,8 @@ Session::start();
 $launchId = LaunchStore::consumeState($_GET['state'] ?? null);
 $launch = $launchId !== null ? LaunchStore::get($launchId) : null;
 if ($launchId === null || $launch === null) {
-    View::error(400, 'Authorization failed', 'Unknown or already-used authorization state. Launch the app again from the EHR.');
+    View::error(400, 'Authorization failed', 'Unknown or already-used authorization state. Launch the app again from the EHR, '
+        . 'or start over at ' . Config::launchUri() . ' (a sign-in must start and end on the same address).');
 }
 
 if (isset($_GET['error'])) {
@@ -43,9 +44,12 @@ if (!is_string($code) || $code === '') {
     View::error(400, 'Authorization failed', 'The authorization server did not return a code.');
 }
 
-$client = Config::clientFor((string)$launch['issuer']);
+$isPublic = ($launch['client_type'] ?? null) === 'public';
+$client = $isPublic ? Config::publicClientFor((string)$launch['issuer']) : Config::clientFor((string)$launch['issuer']);
 if ($client === null) {
-    View::error(400, 'Authorization failed', 'This app is no longer registered with the launching server.');
+    View::error(400, 'Authorization failed', $isPublic
+        ? 'The public patient client is no longer registered with this server.'
+        : 'This app is no longer registered with the launching server.');
 }
 
 try {
@@ -57,7 +61,10 @@ try {
     );
 } catch (Throwable $exception) {
     $message = $exception->getMessage();
-    if (stripos($message, 'client authentication failed') !== false || stripos($message, 'invalid_client') !== false) {
+    if ($isPublic && (stripos($message, 'client authentication failed') !== false || stripos($message, 'invalid_client') !== false)) {
+        $message .= ' — the server did not accept the public patient client ' . $client['client_id']
+            . '. Check that it is enabled in OpenEMR (Admin > System > API Clients), or register it again.';
+    } elseif (stripos($message, 'client authentication failed') !== false || stripos($message, 'invalid_client') !== false) {
         $message .= ' — the server rejected this app\'s client ID or secret for ' . $launch['issuer']
             . '. On the administration page, run Check for this site; it reports a secret mismatch and Repair secret fixes it.'
             . ' If Check says the server no longer knows the client, register again and enable the new client.';

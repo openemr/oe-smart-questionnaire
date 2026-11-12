@@ -24,6 +24,17 @@ use RuntimeException;
  * The app registers as a confidential client: it keeps tokens server-side, and OpenEMR only
  * grants user/ scopes to confidential clients. OpenEMR creates new clients disabled, and has
  * no API to delete one, so re-registering leaves the previous client for an admin to disable.
+ *
+ * The same client also carries the patient sign-in scopes the server publishes
+ * (ScopeProfiles::patientScopesFor()). A confidential client is the kind OpenEMR's
+ * Patient App FHIR Writes mode lets write in both its "Confidential apps" and
+ * "Confidential and public apps" settings.
+ *
+ * A second, public client can be registered beside it for patient sign-in only
+ * (registerPublic()): no secret, PKCE only, the way a phone or browser app signs in. OpenEMR
+ * gives a public client patient/ scopes only, enables one without launch automatically, and
+ * lets it write only in the "Confidential and public apps" mode; in "Confidential apps" it
+ * drops the write scopes from the token, and the app shows the patient a read-only home.
  */
 final class Registrar
 {
@@ -107,6 +118,136 @@ final class Registrar
     }
 
     /**
+     * A public client for patient sign-in: no secret, no launch URI (no EHR launch), patient/
+     * scopes only. token_endpoint_auth_method is left out: OpenEMR does not accept "none", and
+     * application_type "public" is what makes it issue no secret.
+     *
+     * @return array<string, mixed>
+     */
+    public function publicPayload(string $clientName, string $contact, string $scope): array
+    {
+        return [
+            'application_type' => 'public',
+            'client_name' => $clientName,
+            'contacts' => [$contact],
+            'redirect_uris' => [Config::redirectUri()],
+            'post_logout_redirect_uris' => [Config::launchUri()],
+            'grant_types' => ['authorization_code'],
+            'response_types' => ['code'],
+            'scope' => $scope,
+        ];
+    }
+
+    public static function publicClientName(?string $siteName): string
+    {
+        return self::clientName($siteName) . ' - patient, public';
+    }
+
+    /**
+     * Registers the public patient client for an already registered server and saves it in that
+     * server's record. Registering again replaces it (the old one stays in OpenEMR to disable).
+     *
+     * @return array<string, mixed>
+     */
+    public function registerPublic(string $issuer, ?string $siteName, ?string $registrationEndpoint = null): array
+    {
+        $issuer = Config::normalizeIssuer($issuer);
+        $confidential = Config::clientFor($issuer);
+        if ($confidential === null) {
+            throw new RuntimeException("Register the confidential client for {$issuer} first; the public patient client is kept beside it.");
+        }
+        $siteName ??= is_string($confidential['site'] ?? null) ? $confidential['site'] : null;
+        $configuration = (new SmartClient($this->http))->discover($issuer);
+        $patientScope = ScopeProfiles::patientScopesFor(ScopeCheck::advertised($configuration));
+        if ($patientScope === null) {
+            throw new RuntimeException('Not registered: ' . self::patientNote(''));
+        }
+        $clientName = self::publicClientName($siteName);
+        $decoded = $this->post(
+            self::registrationEndpoint($configuration, $registrationEndpoint),
+            $this->publicPayload($clientName, self::contact(), $patientScope)
+        );
+        $previous = Config::publicClientFor($issuer);
+        $record = array_filter([
+            'client_id' => $decoded['client_id'],
+            'client_name' => $clientName,
+            'token_endpoint_auth_method' => 'none',
+            'registration_access_token' => $decoded['registration_access_token'] ?? null,
+            'registration_client_uri' => $decoded['registration_client_uri'] ?? null,
+            'registered' => gmdate('c'),
+            'replaced_client_id' => $previous['client_id'] ?? null,
+            'patient_scopes' => $patientScope,
+        ], static fn($value) => $value !== null && $value !== '');
+        Config::savePublicClient($issuer, $record);
+        $record['note'] = self::publicNote($patientScope)
+            . (is_string($decoded['client_secret'] ?? null) && $decoded['client_secret'] !== ''
+                ? ' Warning: the server issued a secret, so it registered a confidential client; this app does not use it.'
+                : '');
+
+        return $record;
+    }
+
+    /** What the public client can do, given its patient scopes. */
+    public static function publicNote(string $patientScope): string
+    {
+        $canWrite = str_contains(' ' . $patientScope . ' ', ' patient/QuestionnaireResponse.cu ');
+
+        return 'Public patient client registered. OpenEMR enables a patient-only public client by itself; if it shows '
+            . 'disabled under Admin > System > API Clients, enable it. '
+            . ($canWrite
+                ? 'Patients signed in with it can send questionnaires and home vital signs only while Patient App FHIR Writes '
+                    . 'is set to "Confidential and public apps"; in "Confidential apps" the server leaves the write scopes out '
+                    . 'and the app shows them a read-only home.'
+                : 'The server offers no patient write scopes now, so patients can read only.');
+    }
+
+    private static function contact(): string
+    {
+        return Config::string('contact') !== '' ? Config::string('contact') : 'admin@example.org';
+    }
+
+    /** @param array<string, mixed> $configuration */
+    private static function registrationEndpoint(array $configuration, ?string $override): string
+    {
+        $endpoint = $override ?: ($configuration['registration_endpoint'] ?? null);
+        if (!is_string($endpoint) || $endpoint === '') {
+            // OpenEMR publishes registration in its OAuth2 discovery, not smart-configuration;
+            // the endpoint sits beside authorize.
+            $endpoint = (string)preg_replace('~/authorize/?$~', '/registration', (string)$configuration['authorization_endpoint']);
+        }
+
+        return $endpoint;
+    }
+
+    /**
+     * POSTs a registration and returns the server's answer, which has a client_id.
+     *
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    private function post(string $endpoint, array $payload): array
+    {
+        $response = $this->http->request('POST', $endpoint, [
+            'Content-Type' => 'application/json',
+            'Accept' => 'application/json',
+        ], json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
+        $decoded = json_decode($response['body'], true);
+        if (
+            $response['status'] < 200 || $response['status'] >= 300
+            || !is_array($decoded) || !is_string($decoded['client_id'] ?? null)
+        ) {
+            $reason = is_array($decoded)
+                ? (string)($decoded['error_description'] ?? $decoded['error'] ?? $decoded['message'] ?? 'no client_id')
+                    // OAuth servers put the specifics here, e.g. "Check the `user/X.crus` scope".
+                    . (is_string($decoded['hint'] ?? null) && $decoded['hint'] !== '' ? ' — ' . $decoded['hint'] : '')
+                : substr(strip_tags($response['body']), 0, 300);
+            throw new RuntimeException("Registration at {$endpoint} failed (HTTP {$response['status']}): {$reason}");
+        }
+
+        return $decoded;
+    }
+
+    /**
      * Registers with the server at $issuer, saves the credentials, and returns the saved record.
      *
      * @return array<string, mixed>
@@ -120,16 +261,20 @@ final class Registrar
         $issuer = Config::normalizeIssuer($issuer);
         $profileName = self::resolveProfile($profileName, $siteName);
         $profile = ScopeProfiles::get($profileName);
-        $scope = ScopeProfiles::union($profile['ehr'], $profile['standalone']);
+        $clinicianScope = ScopeProfiles::union($profile['ehr'], $profile['standalone']);
         $configuration = (new SmartClient($this->http))->discover($issuer);
 
         // Split v2 read/write scopes only survive an OpenEMR with the consent-screen fix. A profile
         // that says it needs the fix is allowed through (with a note); anything else is refused.
-        $merges = ScopeCheck::consentMergeProblems($scope);
+        // Patient sign-in scopes are left out: the server publishes patient writes only as v2 .cu,
+        // so they are split by necessity, and are kept only where the server offers them.
+        $merges = ScopeCheck::consentMergeProblems($clinicianScope);
         if ($merges !== [] && !$profile['needs_consent_fix']) {
             throw new RuntimeException('Not registered: ' . implode(' ', self::describeMerges($merges)));
         }
         $advertised = ScopeCheck::advertised($configuration);
+        $patientScope = ScopeProfiles::patientScopesFor($advertised) ?? '';
+        $scope = ScopeProfiles::union($clinicianScope, $patientScope);
         if ($advertised !== null) {
             $problems = ScopeCheck::unsupported($scope, $advertised);
             if ($problems !== []) {
@@ -140,31 +285,11 @@ final class Registrar
                 );
             }
         }
-        $endpoint = $registrationEndpoint ?: ($configuration['registration_endpoint'] ?? null);
-        if (!is_string($endpoint) || $endpoint === '') {
-            // OpenEMR publishes registration in its OAuth2 discovery, not smart-configuration;
-            // the endpoint sits beside authorize.
-            $endpoint = (string)preg_replace('~/authorize/?$~', '/registration', (string)$configuration['authorization_endpoint']);
-        }
-
         $clientName = self::clientName($siteName);
-        $contact = Config::string('contact') !== '' ? Config::string('contact') : 'admin@example.org';
-        $response = $this->http->request('POST', $endpoint, [
-            'Content-Type' => 'application/json',
-            'Accept' => 'application/json',
-        ], json_encode($this->payload($clientName, $contact, $scope), JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
-        $decoded = json_decode($response['body'], true);
-        if (
-            $response['status'] < 200 || $response['status'] >= 300
-            || !is_array($decoded) || !is_string($decoded['client_id'] ?? null)
-        ) {
-            $reason = is_array($decoded)
-                ? (string)($decoded['error_description'] ?? $decoded['error'] ?? $decoded['message'] ?? 'no client_id')
-                    // OAuth servers put the specifics here, e.g. "Check the `user/X.crus` scope".
-                    . (is_string($decoded['hint'] ?? null) && $decoded['hint'] !== '' ? ' — ' . $decoded['hint'] : '')
-                : substr(strip_tags($response['body']), 0, 300);
-            throw new RuntimeException("Registration at {$endpoint} failed (HTTP {$response['status']}): {$reason}");
-        }
+        $decoded = $this->post(
+            self::registrationEndpoint($configuration, $registrationEndpoint),
+            $this->payload($clientName, self::contact(), $scope)
+        );
 
         $previous = Config::clientFor($issuer);
         $record = array_filter([
@@ -181,11 +306,14 @@ final class Registrar
             'scope_profile' => $profileName,
             'ehr_scopes' => $profile['ehr'],
             'standalone_scopes' => $profile['standalone'],
+            'patient_scopes' => $patientScope,
+            // The public patient client is a separate registration; re-registering this one keeps it.
+            'public' => $previous['public'] ?? null,
         ], static fn($value) => $value !== null && $value !== '');
         Config::saveClient($issuer, $record);
-        if ($merges !== []) {
-            $record['note'] = self::consentFixNote($merges);
-        }
+        $notes = $merges !== [] ? [self::consentFixNote($merges)] : [];
+        $notes[] = self::patientNote($patientScope);
+        $record['note'] = implode(' ', $notes);
 
         return $record;
     }
@@ -255,6 +383,28 @@ final class Registrar
     }
 
     /**
+     * What patient sign-in will be able to do with the patient scopes a client was registered with.
+     */
+    public static function patientNote(string $patientScope): string
+    {
+        if ($patientScope === '') {
+            return 'Patient sign-in is not available: the server publishes no launch/patient and patient/Patient.rs '
+                . 'scopes (is the FHIR API on?).';
+        }
+        $writes = [];
+        foreach (['QuestionnaireResponse' => 'questionnaires and home vital signs', 'Observation' => 'vital-sign Observations'] as $type => $what) {
+            if (str_contains(' ' . $patientScope . ' ', " patient/{$type}.cu ")) {
+                $writes[] = $what;
+            }
+        }
+
+        return 'Patient sign-in registered. ' . ($writes === []
+            ? 'Patients can read but not send anything: turn on Patient App FHIR Writes and its QuestionnaireResponse '
+                . 'setting in OpenEMR (Admin > Config > Connectors), then register again.'
+            : 'Patients can send ' . implode(' and ', $writes) . ', held for staff review.');
+    }
+
+    /**
      * Records a client registered by hand in the EHR (e.g. OpenEMR Admin > System > API Clients).
      *
      * @return array<string, mixed>
@@ -280,6 +430,7 @@ final class Registrar
             'scope_profile' => $profileName,
             'ehr_scopes' => $profile['ehr'],
             'standalone_scopes' => $profile['standalone'],
+            'public' => Config::clientFor($issuer)['public'] ?? null,
         ], static fn($value) => $value !== null && $value !== '');
         Config::saveClient($issuer, $record);
 
@@ -307,11 +458,11 @@ final class Registrar
             }
             $siteName = Sites::nameForIssuer($issuer);
             $scopes = ScopeProfiles::forClient($client, $siteName !== null ? Sites::get($siteName) : null);
-            $scope = ScopeProfiles::union($scopes['ehr'], $scopes['standalone']);
+            $scope = ScopeProfiles::union($scopes['ehr'], $scopes['standalone'], $scopes['patient']);
             $profile = ScopeProfiles::get($scopes['profile']);
             $lines[] = 'Scope profile: ' . $scopes['profile'] . ($client === null ? ' (would be used to register)' : '')
-                . ' — ' . $scope;
-            $merges = ScopeCheck::consentMergeProblems($scope);
+                . ' — ' . ScopeProfiles::union($scopes['ehr'], $scopes['standalone']);
+            $merges = ScopeCheck::consentMergeProblems(ScopeProfiles::union($scopes['ehr'], $scopes['standalone']));
             if ($merges !== [] && $profile['needs_consent_fix']) {
                 $lines[] = 'Note: ' . self::consentFixNote($merges);
             } elseif ($merges !== []) {
@@ -329,6 +480,16 @@ final class Registrar
                     $ok = false;
                     $lines[] = 'Scopes the server will reject:';
                     array_push($lines, ...ScopeCheck::describe($problems));
+                }
+                // Patient sign-in: what this client has, against what the server offers today.
+                $offered = ScopeProfiles::patientScopesFor($advertised) ?? '';
+                if ($client !== null && $scopes['patient'] === '') {
+                    $lines[] = 'Patient sign-in: this client was registered before patient sign-in existed. Register again to offer it.';
+                } elseif ($client !== null && $offered !== '' && $offered !== $scopes['patient']) {
+                    $lines[] = 'Patient sign-in: the server now offers ' . $offered . ' but this client has ' . $scopes['patient']
+                        . '. Register again to pick up the change (e.g. Patient App FHIR Writes turned on or off).';
+                } else {
+                    $lines[] = 'Patient sign-in: ' . self::patientNote($client !== null ? $scopes['patient'] : $offered);
                 }
             }
         } catch (\Throwable $exception) {
@@ -370,8 +531,46 @@ final class Registrar
             $lines[] = 'The server has redirect URI ' . implode(', ', $redirects) . ' but this app now uses '
                 . Config::redirectUri() . ' (app_url changed?). Re-register.';
         }
-        $lines[] = 'Whether it is enabled is only visible in the EHR (OpenEMR: Admin > System > API Clients).';
+        array_push($lines, ...$this->verifyPublic($issuer, $ok));
+        $lines[] = 'Whether they are enabled is only visible in the EHR (OpenEMR: Admin > System > API Clients).';
 
         return ['ok' => $ok, 'lines' => $lines];
+    }
+
+    /**
+     * Lines about the public patient client; clears $ok on a problem.
+     *
+     * @return list<string>
+     */
+    private function verifyPublic(string $issuer, bool &$ok): array
+    {
+        $public = Config::publicClientFor($issuer);
+        if ($public === null) {
+            return ['Public patient client: not registered (optional; register it to try patient sign-in as a public app).'];
+        }
+        if (!is_string($public['registration_client_uri'] ?? null) || !is_string($public['registration_access_token'] ?? null)) {
+            return ['Public patient client ' . $public['client_id'] . ': its registration cannot be read back.'];
+        }
+        $read = $this->readRegistration($public);
+        if ($read['error'] !== null) {
+            $ok = false;
+            return ['Public patient client: ' . $read['error']];
+        }
+        $server = $read['registration'];
+        if (is_string($server['client_secret'] ?? null) && $server['client_secret'] !== '') {
+            $ok = false;
+            return ['Public patient client ' . $public['client_id'] . ' has a secret on the server, so the server treats it '
+                . 'as confidential. Register the public client again.'];
+        }
+        $lines = ['Public patient client confirmed: ' . $public['client_id'] . ' (no secret; PKCE only) — '
+            . (string)($public['patient_scopes'] ?? '')];
+        $redirects = is_array($server['redirect_uris'] ?? null) ? $server['redirect_uris'] : [];
+        if ($redirects !== [] && !in_array(Config::redirectUri(), $redirects, true)) {
+            $ok = false;
+            $lines[] = 'The public patient client has redirect URI ' . implode(', ', $redirects) . ' but this app now uses '
+                . Config::redirectUri() . '. Register it again.';
+        }
+
+        return $lines;
     }
 }

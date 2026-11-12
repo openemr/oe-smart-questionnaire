@@ -27,12 +27,51 @@ use RuntimeException;
  *
  * Each client record stores the exact scopes it was registered with, and launches request those,
  * so a later change of profile or config never breaks an existing registration.
+ *
+ * Patient sign-in (a patient logging in with OpenEMR's Patient Login) uses PATIENT whatever the
+ * profile: patient/ scopes are published in the v2 form only, QuestionnaireResponse write as .cu.
+ * Registration keeps only the ones the server publishes (patientScopesFor()), so a site with
+ * Patient App FHIR Writes off still registers, and patient/Observation.cu is picked up by
+ * registering again once OpenEMR accepts vital signs from patient apps.
  */
 final class ScopeProfiles
 {
     public const DEFAULT = 'v1';
 
     private const BASE = 'openid fhirUser %s user/Patient.rs user/Questionnaire.rs';
+
+    /** What patient sign-in asks for, before filtering to what the server publishes. */
+    public const PATIENT = 'openid fhirUser launch/patient patient/Patient.rs patient/Questionnaire.rs '
+        . 'patient/QuestionnaireResponse.rs patient/QuestionnaireResponse.cu '
+        . 'patient/Observation.rs patient/Observation.cu '
+        . 'patient/AllergyIntolerance.rs patient/Condition.rs';
+
+    /**
+     * The patient sign-in scopes to register: PATIENT less the launch/patient and patient/ scopes
+     * the server does not publish. Null when the server does not publish its scopes, or lacks the
+     * two patient sign-in can't work without (launch/patient, patient/Patient.rs).
+     *
+     * @param list<string>|null $advertised
+     */
+    public static function patientScopesFor(?array $advertised): ?string
+    {
+        if ($advertised === null) {
+            return null;
+        }
+        $offered = array_flip($advertised);
+        $kept = [];
+        foreach (preg_split('/\s+/', self::PATIENT, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $scope) {
+            $serverDecides = $scope === 'launch/patient' || str_starts_with($scope, 'patient/');
+            if (!$serverDecides || isset($offered[$scope])) {
+                $kept[] = $scope;
+            }
+        }
+        if (!in_array('launch/patient', $kept, true) || !in_array('patient/Patient.rs', $kept, true)) {
+            return null;
+        }
+
+        return implode(' ', $kept);
+    }
 
     /** @return array<string, array{label: string, ehr: string, standalone: string, needs_consent_fix: bool}> */
     public static function all(): array
@@ -119,7 +158,12 @@ final class ScopeProfiles
      *
      * @param array<string, mixed>|null $client
      * @param array<string, mixed>|null $site
-     * @return array{ehr: string, standalone: string, profile: string}
+     * `patient` is what the client was registered with for patient sign-in, or '' for a client
+     * registered before patient sign-in existed (register it again to offer patient sign-in).
+     *
+     * @param array<string, mixed>|null $client
+     * @param array<string, mixed>|null $site
+     * @return array{ehr: string, standalone: string, patient: string, profile: string}
      */
     public static function forClient(?array $client, ?array $site): array
     {
@@ -133,17 +177,20 @@ final class ScopeProfiles
             'standalone' => is_string($client['standalone_scopes'] ?? null) && $client['standalone_scopes'] !== ''
                 ? $client['standalone_scopes']
                 : $profile['standalone'],
+            'patient' => is_string($client['patient_scopes'] ?? null) ? $client['patient_scopes'] : '',
             'profile' => $profileName,
         ];
     }
 
-    /** Everything a client must be registered for: EHR and standalone scopes together. */
-    public static function union(string $ehr, string $standalone): string
+    /** Everything a client must be registered for: EHR, standalone and patient scopes together. */
+    public static function union(string ...$scopeStrings): string
     {
-        return implode(' ', array_values(array_unique(array_merge(
-            preg_split('/\s+/', $ehr, -1, PREG_SPLIT_NO_EMPTY) ?: [],
-            preg_split('/\s+/', $standalone, -1, PREG_SPLIT_NO_EMPTY) ?: []
-        ))));
+        $all = [];
+        foreach ($scopeStrings as $scopes) {
+            $all = array_merge($all, preg_split('/\s+/', $scopes, -1, PREG_SPLIT_NO_EMPTY) ?: []);
+        }
+
+        return implode(' ', array_values(array_unique($all)));
     }
 
     /** @return array{label: string, ehr: string, standalone: string, needs_consent_fix: bool} */

@@ -160,6 +160,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     . 'Its scopes in OpenEMR must match that profile.');
                 break;
 
+            case 'register_public':
+                if (!$validIssuer($issuer)) {
+                    throw new RuntimeException('Choose a site or enter a valid FHIR base URL.');
+                }
+                $record = $registrar->registerPublic($issuer, $siteName);
+                $lines = ["Registered the public patient client for {$label}: {$record['client_id']} (no secret; PKCE only)."];
+                if (isset($record['replaced_client_id'])) {
+                    $lines[] = "This replaces public client {$record['replaced_client_id']}; disable it under Admin > System > API Clients.";
+                }
+                $lines[] = (string)$record['note'];
+                $flash('success', $lines);
+                break;
+
+            case 'forget_public':
+                $public = Config::publicClientFor($issuer);
+                Config::savePublicClient($issuer, null);
+                $flash('info', "Forgot the public patient client for {$label}"
+                    . ($public !== null ? " ({$public['client_id']}). Disable it in OpenEMR if it is no longer used." : '.'));
+                break;
+
             case 'verify':
                 $result = $registrar->verify($issuer, Config::clientFor($issuer));
                 $flash($result['ok'] ? 'success' : 'warning', ["Check of {$label}:", ...$result['lines']]);
@@ -217,12 +237,18 @@ $row = static function (string $name, string $issuer, ?array $client) use ($form
     $fields = $name !== '' ? ['site' => $name] : ['iss' => $issuer];
     $site = $name !== '' ? Sites::get($name) : null;
     $current = ScopeProfiles::forClient($client, $site)['profile'];
+    $public = $client !== null ? Config::publicClientFor($issuer) : null;
+    $hasPatient = $client !== null && ScopeProfiles::forClient($client, $site)['patient'] !== '';
     $status = $client === null
         ? '<span class="badge badge-secondary">not registered</span>'
         : '<span class="badge badge-success">registered</span> <code class="small">' . h((string)$client['client_id']) . '</code>'
             . '<div class="small text-muted">' . h(substr((string)($client['registered'] ?? ''), 0, 10))
             . (!empty($client['recorded_manually']) ? ' · recorded manually' : '')
-            . ' · <span class="badge badge-light border" title="Scope profile">' . h($current) . ' scopes</span></div>';
+            . ' · <span class="badge badge-light border" title="Scope profile">' . h($current) . ' scopes</span></div>'
+            . ($public !== null
+                ? '<div class="small mt-1"><span class="badge badge-info">public patient client</span> <code>'
+                    . h((string)$public['client_id']) . '</code></div>'
+                : '<div class="small text-muted mt-1">no public patient client</div>');
     $actions = $client === null
         ? $form('register', $fields, 'Register', 'btn-primary', null, $profileSelect($current))
         : $form(
@@ -235,11 +261,34 @@ $row = static function (string $name, string $issuer, ?array $client) use ($form
         )
             . $form('verify', $fields, 'Check', 'btn-outline-secondary')
             . (!empty($client['registration_client_uri']) ? $form('repair', $fields, 'Repair secret', 'btn-outline-warning') : '')
-            . '<a class="btn btn-sm btn-outline-success" href="launch.php?' . h(http_build_query(['iss' => $issuer])) . '">Standalone launch</a> '
-            . $form('forget', $fields, 'Forget', 'btn-outline-danger', 'Remove the saved credentials for this site?');
+            . $form(
+                'forget',
+                $fields,
+                'Forget',
+                'btn-outline-danger',
+                'Remove the saved credentials for this site? The public patient client is forgotten too.'
+            )
+            . '<div class="mt-1">'
+            . ($public === null
+                ? $form('register_public', $fields, 'Add public client', 'btn-outline-info')
+                : $form(
+                    'register_public',
+                    $fields,
+                    'Re-register public',
+                    'btn-outline-info',
+                    'Register a new public patient client? OpenEMR keeps the current one until you disable it.'
+                )
+                    . $form('forget_public', $fields, 'Forget public', 'btn-outline-danger', 'Remove the saved public patient client?'))
+            . '</div><div class="mt-1 small">Try: '
+            . '<a href="launch.php?' . h(http_build_query(['iss' => $issuer])) . '">staff</a>'
+            . ($hasPatient ? ' · <a href="launch.php?' . h(http_build_query(['iss' => $issuer, 'mode' => 'patient'])) . '">patient (confidential)</a>' : '')
+            . ($public !== null
+                ? ' · <a href="launch.php?' . h(http_build_query(['iss' => $issuer, 'mode' => 'patient', 'client' => 'public'])) . '">patient (public)</a>'
+                : '')
+            . '</div>';
 
     return '<tr><td><strong>' . h($name !== '' ? $name : '—') . '</strong><div class="small text-muted text-break">' . h($issuer) . '</div></td>'
-        . '<td>' . $status . '</td><td class="text-nowrap">' . $actions . '</td></tr>';
+        . '<td>' . $status . '</td><td class="sq-actions">' . $actions . '</td></tr>';
 };
 
 View::header('Administration');
@@ -265,7 +314,10 @@ unset($_SESSION['sq_flash']);
         <dl class="row mb-0">
             <dt class="col-sm-3">Launch URI</dt><dd class="col-sm-9"><code><?= h(Config::launchUri()) ?></code></dd>
             <dt class="col-sm-3">Redirect URI</dt><dd class="col-sm-9"><code><?= h(Config::redirectUri()) ?></code></dd>
-            <dt class="col-sm-3">Client type</dt><dd class="col-sm-9">Confidential (client_secret_post) with PKCE S256</dd>
+            <dt class="col-sm-3">Client types</dt><dd class="col-sm-9">Confidential (client_secret_post) with PKCE S256, for EHR launch,
+                staff and patient sign-in. Optional <b>public patient client</b> per server (no secret, PKCE S256, patient/ scopes only):
+                <i>Add public client</i>. OpenEMR lets a public client send only when Patient App FHIR Writes is
+                "Confidential and public apps".</dd>
         </dl>
         <table class="table table-sm table-borderless mb-0 mt-2">
             <thead><tr><th>Scope profile</th><th>Scopes registered</th></tr></thead>

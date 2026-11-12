@@ -270,6 +270,40 @@ Open `https://<app_url>/launch.php` and pick a server, or use **Standalone launc
 page. OpenEMR signs you in and shows its patient picker. The app then lists the available
 questionnaires and you choose one. **Choose another questionnaire** returns to that list.
 
+### Patient sign-in
+
+Patients use the same address, `https://<app_url>/launch.php`, then **Patient sign-in** for the
+server. On OpenEMR's sign-in page they choose **Patient Login** and use their patient portal
+account, and land on their home page.
+
+There are two patient sign-ins per server:
+
+- **Patient sign-in (confidential)** uses the app's registered client, which proves itself with
+  its secret.
+- **Patient sign-in (public)** uses a separate public client: no secret, PKCE only, the way a phone
+  or browser app signs in. Add it on the administration page with **Add public client**, or
+  `php bin/register.php --site=<name> --public`. OpenEMR enables a patient-only public client by
+  itself. **Check** confirms it; **Forget public** (or `--forget-public`) drops the app's copy.
+
+For patients to *send* anything, in OpenEMR:
+
+1. **Admin > Config > Connectors > Patient App FHIR Writes**: *Confidential apps* (the confidential
+   sign-in sends; the public one reads only, and the app says so) or *Confidential and public apps*
+   (both send), and tick **Patient App FHIR Writes:
+   QuestionnaireResponse**. The Vital Signs, AllergyIntolerance and Condition settings exist, but
+   OpenEMR doesn't accept those from patient apps yet; the app picks them up when it does.
+2. Add the **Home vital signs** questionnaire once: the API Explorer's *Patient app writes* panel
+   has **Seed Home vital signs Questionnaire**, or POST `docs/home-vital-signs.questionnaire.json`
+   to `/fhir/Questionnaire` with a staff token. Without it, patients can still answer other
+   questionnaires.
+3. **Register the app again** (step 7) whenever Patient App FHIR Writes changes: registration takes
+   only the patient scopes the server publishes at that moment, and **Check** says when they differ.
+   Enable the new client. Register the public client again too (**Re-register public**).
+
+What patients send waits in **Miscellaneous > Patient App Submissions** until staff approve or deny
+it. Approved, it is in the chart under the same id, and the app shows it as *in your record*.
+Denied or withdrawn, it disappears from the app.
+
 ## 10. Using the app
 
 | Control | Does |
@@ -316,12 +350,14 @@ in different tabs.
 | "This app is not registered with https://…/fhir" | The `iss` OpenEMR sent does not match any registered site. The message shows the exact `iss`. Make the site URL in `config.php` match it (section 4), or register that URL on the admin page. |
 | Launch menu doesn't list the app | The client is disabled, or was registered without `launch`. Enable it under **API Clients**; re-register if its scopes are wrong. |
 | "Token request failed (HTTP 401): Client authentication failed" after approving the consent screen | OpenEMR rejected the app's client secret. Run **Check** for the site: it reads the registration back and reports whether the saved secret matches. **Repair secret** fixes a mismatch. If Check says OpenEMR can't decrypt the secret or no longer knows the client, register again and enable the new client. OpenEMR logs a mismatch as "Confidential client sent invalid client secret"; a decrypt failure is not logged. |
+| A patient signed in with the public app sees "You can look, but not send" | Patient App FHIR Writes is *Confidential apps*, so OpenEMR leaves a public client's write scopes out. Use the confidential patient sign-in, or set it to *Confidential and public apps*. |
+| "Public sign-in unavailable" | No public patient client is saved for that server. Use **Add public client** on the administration page (or `php bin/register.php --site=<name> --public`). |
 | `invalid_client` from OpenEMR | Client disabled, or `var/clients.json` holds an old client. **Check** on the admin page, then enable or re-register. |
 | Workspace says "…This client uses the v2 scope profile, which needs the OpenEMR consent-screen fix" | The site was registered with `v2` but its OpenEMR doesn't have the fix, so consent dropped the QuestionnaireResponse scopes. Re-register the site with `v1`, or install the OpenEMR fix. |
 | Save fails with HTTP 401 "Unauthorized", or the workspace says "The server did not grant: user/QuestionnaireResponse…" | The token has no QuestionnaireResponse write access. Either a permission was unchecked on OpenEMR's consent screen (relaunch and leave it checked), or the app was registered with v2 read+write scopes such as `.rs` + `.cu`, which OpenEMR's consent screen merges and then drops. Use the shipped v1 `.read`/`.write` scopes and re-register. The OpenEMR fix for the consent screen is in `openemr/templates/oauth2/scope-authorize.html.twig`. |
 | Registration fails: "the server does not accept these scopes" | The message names each rejected scope and what the server offers for that resource. The usual cause is a combined read+write scope such as `user/QuestionnaireResponse.crus`; split it into `user/QuestionnaireResponse.rs user/QuestionnaireResponse.cu`. **Check** on the admin page (or `php bin/register.php --site=<name> --check`) runs the same test without registering. |
 | `invalid_scope` at launch, or missing permissions | Scopes were edited after registering. Re-register. |
-| "Unknown or already-used authorization state" | The session cookie was lost between launch and callback. Use HTTPS for `app_url` (the cookie must be `SameSite=None; Secure` inside OpenEMR's window), and don't use the browser's back button during sign-in. |
+| "Unknown or already-used authorization state" | The session cookie was lost between launch and callback. Use HTTPS for `app_url` (the cookie must be `SameSite=None; Secure` inside OpenEMR's window), and don't use the browser's back button during sign-in. Open the app under `app_url`'s host name: OpenEMR returns to `app_url`'s `callback.php`, and a cookie set on another name (e.g. `https://localhost/…` when `app_url` is a domain) is not sent there. `launch.php` now moves such a launch to `app_url` before sign-in. |
 | App area stays blank inside OpenEMR | The browser blocked framing. The app only allows framing by the origins of registered `iss` URLs; if you open OpenEMR under a different host name than its Site Address Override, framing is refused. Use the same host name. |
 | SMART discovery fails / SSL errors | The app server cannot reach OpenEMR or doesn't trust its certificate. Test with **Check**. For a local self-signed OpenEMR set `verify_tls` to `false`. |
 | "The access token for this launch has expired" | Tokens last about an hour. Launch again from the chart. |
