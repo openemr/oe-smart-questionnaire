@@ -250,6 +250,17 @@ $r = http('GET', "{$app}/launch.php?" . http_build_query(['iss' => $iss, 'launch
 $data2 = pageData($r['body']);
 check('continue launch opens that response', ($data2['initialResponseId'] ?? null) === $id);
 check('history lists only this patient', count($data2['responses'] ?? []) === 1);
+// The mock pages its search by two: the history needs every page.
+$state = mockState($work);
+$before = $state;
+foreach (['page-a', 'page-b', 'page-c'] as $n => $extra) {
+    $state['responses'][$extra] = ['resourceType' => 'QuestionnaireResponse', 'id' => $extra, 'status' => 'completed',
+        'authored' => '2026-01-0' . ($n + 1) . 'T10:00:00Z', 'questionnaire' => 'Questionnaire/q1', 'subject' => ['reference' => 'Patient/p1']];
+}
+file_put_contents("{$work}/mock/state.json", json_encode($state));
+$paged = pageData(http('GET', "{$app}/index.php?lid={$lid}", $jar)['body']);
+check('history follows every page of the search (next links)', count($paged['responses'] ?? []) === 4, (string)count($paged['responses'] ?? []));
+file_put_contents("{$work}/mock/state.json", json_encode($before));
 check('first launch still usable (per-launch state)', pageData(http('GET', "{$app}/index.php?lid={$lid}", $jar)['body']) !== null);
 
 // --- standalone launch without a questionnaire shows the picker --------------------------------
@@ -342,6 +353,143 @@ check('unknown scope profile refused', $code !== 0 && str_contains($outText, "Un
 [$code, $outText] = $cli('register.php', '--site=mock');
 check('re-register without --scopes returns to the site default (v1)', $code === 0 && str_contains($outText, '(v1 scopes)'), $outText);
 
+// --- patient sign-in: confidential and public patient clients --------------------------------------
+[$code, $outText] = $cli('register.php', '--site=mock --public');
+$clientsNow = json_decode((string)file_get_contents("{$work}/clients.json"), true);
+$publicClient = $clientsNow[$iss]['public'] ?? [];
+check('--public registers a public patient client', $code === 0 && isset($publicClient['client_id']) && !isset($publicClient['client_secret'])
+    && str_contains($outText, 'no secret; PKCE only'), $outText);
+$publicBody = end(mockState($work)['clients'])['body'] ?? [];
+check('public client registered as public, patient scopes only, no launch URI', ($publicBody['application_type'] ?? '') === 'public'
+    && !isset($publicBody['token_endpoint_auth_method']) && !isset($publicBody['initiate_login_uri'])
+    && !str_contains($publicBody['scope'] ?? '', 'user/') && str_contains($publicBody['scope'] ?? '', 'patient/QuestionnaireResponse.cu'), json_encode($publicBody));
+[$code, $outText] = $cli('register.php', '--list');
+check('--list shows the public patient client', str_contains($outText, 'public patient client ' . ($publicClient['client_id'] ?? '?')), $outText);
+[$code, $outText] = $cli('register.php', '--site=mock --check');
+check('--check confirms the public patient client', str_contains($outText, 'Public patient client confirmed'), $outText);
+[$code, $outText] = $cli('register.php', '--site=mock');
+$clientsNow = json_decode((string)file_get_contents("{$work}/clients.json"), true);
+check('re-registering the confidential client keeps the public one', $code === 0
+    && ($clientsNow[$iss]['public']['client_id'] ?? null) === ($publicClient['client_id'] ?? '?'));
+
+$r = http('GET', "{$app}/launch.php", $jar);
+check('sign-in page offers confidential and public patient sign-in', str_contains($r['body'], 'mode=patient&amp;client=public')
+    && str_contains($r['body'], 'Patient sign-in <span class="sq-kind">confidential</span>'));
+
+$patientJar = "{$work}/patient-cookies.txt";
+$patientSignIn = static function (array $query, array $context) use ($app, $iss, $work, $patientJar): array {
+    // OpenEMR publishes patient writes as v2 .cu only, so patient sign-in needs the consent-screen fix.
+    setContext($work, $context + ['consentFixed' => true]);
+    @unlink($patientJar);
+    $r = http('GET', "{$app}/launch.php?" . http_build_query(['iss' => $iss, 'mode' => 'patient'] + $query), $patientJar);
+    parse_str((string)parse_url($r['url'], PHP_URL_QUERY), $q);
+    return [$r, (string)($q['lid'] ?? '')];
+};
+$sendAnswer = static function (string $lid) use ($app, $patientJar, $draft): array {
+    $page = pageData(http('GET', "{$app}/index.php?" . http_build_query(['lid' => $lid, 'q' => 'q1']), $patientJar)['body']);
+    $r = http(
+        'POST',
+        "{$app}/api.php?" . http_build_query(['lid' => $lid, 'action' => 'save']),
+        $patientJar,
+        json_encode(['status' => 'completed'] + $draft),
+        ['Content-Type: application/json', 'X-CSRF-Token: ' . ($page['csrf'] ?? '')]
+    );
+    return [$page, $r];
+};
+
+// Confidential and public apps may write: the public client signs in and sends, held for review.
+[$r, $lid] = $patientSignIn(['client' => 'public'], []);
+$tokenRequest = mockState($work)['lastTokenRequest'] ?? [];
+check('public sign-in lands on the patient home', str_contains($r['url'], '/home.php') && str_contains($r['body'], 'Ada Lovelace')
+    && str_contains($r['body'], 'public app'), $r['url'] . ' ' . strip_tags(substr($r['body'], 0, 1500)));
+check('public sign-in exchanges the code without a secret', ($tokenRequest['client_id'] ?? null) === ($publicClient['client_id'] ?? '?')
+    && ($tokenRequest['secret_sent'] ?? true) === false, json_encode($tokenRequest));
+check('public sign-in with writes allowed has no read-only notice', !str_contains($r['body'], 'You can look, but not send'));
+[$page, $r] = $sendAnswer($lid);
+$saved = json_decode($r['body'], true)['resource'] ?? [];
+check('public app can send when the practice accepts public apps', ($page['canSend'] ?? null) === true && $r['status'] === 200
+    && in_array('held-for-review', array_column($saved['meta']['tag'] ?? [], 'code'), true), $r['body']);
+$r = http('GET', "{$app}/home.php?" . http_build_query(['lid' => $lid]), $patientJar);
+check('home lists the held answer and its questionnaire status', str_contains($r['body'], '1 waiting for review')
+    && str_contains($r['body'], 'Waiting for review'));
+
+// "Confidential apps" only: the public client's write scope is dropped; it reads, the confidential one writes.
+[$r, $lid] = $patientSignIn(['client' => 'public'], ['writeMode' => 'confidential']);
+check('public sign-in under confidential-only explains and offers the confidential sign-in', str_contains($r['body'], 'You can look, but not send')
+    && str_contains($r['body'], 'Confidential sign-in') && str_contains($r['body'], 'read only'), strip_tags(substr($r['body'], 0, 2500)));
+[$page, $r] = $sendAnswer($lid);
+check('public app under confidential-only opens forms read-only and cannot send', ($page['canSend'] ?? null) === false && $r['status'] === 401, $r['body']);
+[$r, $lid] = $patientSignIn([], ['writeMode' => 'confidential']);
+check('confidential patient sign-in under confidential-only can send', str_contains($r['body'], 'confidential app')
+    && !str_contains($r['body'], 'You can look, but not send'));
+[$page, $r] = $sendAnswer($lid);
+check('confidential patient app sends under confidential-only', ($page['canSend'] ?? null) === true && $r['status'] === 200, $r['body']);
+
+// Sign out forgets the launch.
+$home = http('GET', "{$app}/home.php?" . http_build_query(['lid' => $lid]), $patientJar);
+$patientCsrf = preg_match('~name="csrf" value="([0-9a-f]+)"~', $home['body'], $m) === 1 ? $m[1] : '';
+http('POST', "{$app}/signout.php", $patientJar, http_build_query(['lid' => $lid, 'csrf' => 'wrong']));
+check('sign out with a wrong token keeps the launch', http('GET', "{$app}/home.php?" . http_build_query(['lid' => $lid]), $patientJar)['status'] === 200);
+$r = http('POST', "{$app}/signout.php", $patientJar, http_build_query(['lid' => $lid, 'csrf' => $patientCsrf]));
+check('sign out returns to the sign-in page', str_contains($r['url'], '/launch.php'));
+check('signed-out launch is gone', http('GET', "{$app}/home.php?" . http_build_query(['lid' => $lid]), $patientJar)['status'] === 401);
+
+// --- patient portal launch: OpenEMR's portal opens the portal client with the patient's launch ------
+[$code, $outText] = $cli('register.php', '--site=mock --portal');
+$clientsNow = json_decode((string)file_get_contents("{$work}/clients.json"), true);
+$portalClient = $clientsNow[$iss]['portal'] ?? [];
+check('--portal registers a patient portal client', $code === 0 && isset($portalClient['client_id'], $portalClient['client_secret'])
+    && str_contains($outText, 'launch.php?mode=portal'), $outText);
+$portalBody = end(mockState($work)['clients'])['body'] ?? [];
+check('portal client registered as private with the portal launch URI, launch and patient scopes only', ($portalBody['application_type'] ?? '') === 'private'
+    && ($portalBody['initiate_login_uri'] ?? '') === "{$app}/launch.php?mode=portal"
+    && str_contains(' ' . ($portalBody['scope'] ?? '') . ' ', ' launch ') && !str_contains($portalBody['scope'] ?? '', 'launch/patient')
+    && !str_contains($portalBody['scope'] ?? '', 'user/') && str_contains($portalBody['scope'] ?? '', 'patient/QuestionnaireResponse.cu'), json_encode($portalBody));
+[$code, $outText] = $cli('register.php', '--site=mock --check');
+check('--check confirms the patient portal client', str_contains($outText, 'Patient portal client confirmed'), $outText);
+[$code, $outText] = $cli('register.php', '--site=mock');
+$clientsNow = json_decode((string)file_get_contents("{$work}/clients.json"), true);
+check('re-registering the confidential client keeps the portal one', $code === 0
+    && ($clientsNow[$iss]['portal']['client_id'] ?? null) === ($portalClient['client_id'] ?? '?')
+    && ($clientsNow[$iss]['public']['client_id'] ?? null) === ($publicClient['client_id'] ?? '?'));
+
+$portalLaunch = static function (array $query) use ($app, $iss, $work, $patientJar): array {
+    setContext($work, ['consentFixed' => true, 'intent' => 'patient.portal']);
+    @unlink($patientJar);
+    $r = http('GET', "{$app}/launch.php?" . http_build_query(['mode' => 'portal', 'iss' => $iss] + $query), $patientJar);
+    parse_str((string)parse_url($r['url'], PHP_URL_QUERY), $q);
+    return [$r, (string)($q['lid'] ?? '')];
+};
+[$r] = $portalLaunch([]);
+check('portal launch URI without a launch explains where to open it', $r['status'] === 400
+    && str_contains($r['body'], 'Open this from your patient portal'), strip_tags(substr($r['body'], 0, 800)));
+[$r, $lid] = $portalLaunch(['launch' => 'Lportal']);
+$tokenRequest = mockState($work)['lastTokenRequest'] ?? [];
+check('portal launch lands on the patient home', str_contains($r['url'], '/home.php') && str_contains($r['body'], 'Ada Lovelace')
+    && str_contains($r['body'], 'patient portal'), $r['url'] . ' ' . strip_tags(substr($r['body'], 0, 1500)));
+check('portal launch sends the launch with the portal client', (bool)preg_grep(
+    '~^GET /oauth/authorize\?(?=.*launch=Lportal)(?=.*client_id=' . preg_quote((string)($portalClient['client_id'] ?? '?'), '~') . ')~',
+    mockState($work)['log']
+));
+check('portal launch exchanges the code with the portal client secret', ($tokenRequest['client_id'] ?? null) === ($portalClient['client_id'] ?? '?')
+    && ($tokenRequest['secret_sent'] ?? false) === true, json_encode($tokenRequest));
+[$page, $r] = $sendAnswer($lid);
+$saved = json_decode($r['body'], true)['resource'] ?? [];
+check('portal app sends, held for review', ($page['canSend'] ?? null) === true && $r['status'] === 200
+    && in_array('held-for-review', array_column($saved['meta']['tag'] ?? [], 'code'), true), $r['body']);
+[$code, $outText] = $cli('register.php', '--site=mock --forget-portal');
+check('--forget-portal removes the patient portal client', $code === 0
+    && !isset(json_decode((string)file_get_contents("{$work}/clients.json"), true)[$iss]['portal']), $outText);
+[$r] = $portalLaunch(['launch' => 'Lportal2']);
+check('portal launch without a portal client explains', $r['status'] === 400 && str_contains($r['body'], 'No patient portal client'));
+
+[$code, $outText] = $cli('register.php', '--site=mock --forget-public');
+check('--forget-public removes the public patient client', $code === 0
+    && !isset(json_decode((string)file_get_contents("{$work}/clients.json"), true)[$iss]['public']), $outText);
+[$r] = $patientSignIn(['client' => 'public'], []);
+check('public sign-in without a public client explains', $r['status'] === 400 && str_contains($r['body'], 'No public patient client'));
+setContext($work, ['fhirContext' => [['reference' => 'Questionnaire/q1']], 'appContext' => '{"action":"start"}']);
+
 // --- admin console ---------------------------------------------------------------------------------
 $adminJar = "{$work}/admin-cookies.txt";
 check('admin locked until a password is set', http('GET', "{$app}/admin.php", $adminJar)['status'] === 503);
@@ -359,6 +507,7 @@ $r = http('POST', "{$app}/admin.php", $adminJar, http_build_query(['action' => '
 check('admin action without CSRF refused', str_contains($r['body'], 'The form expired'));
 $r = http('POST', "{$app}/admin.php", $adminJar, http_build_query(['action' => 'verify', 'site' => 'mock', 'csrf' => $adminCsrf]));
 check('admin Check confirms registration', str_contains($r['body'], 'Registration confirmed'));
+check('admin offers to add a public patient client', str_contains($r['body'], 'Add public client'));
 check('admin lists both scope profiles', str_contains($r['body'], 'Scope profile') && str_contains($r['body'], 'user/QuestionnaireResponse.rs user/QuestionnaireResponse.cu')
     && str_contains($r['body'], 'name="scope_profile"'));
 $r = http('POST', "{$app}/admin.php", $adminJar, http_build_query(['action' => 'register', 'site' => 'mock', 'scope_profile' => 'v2', 'csrf' => $adminCsrf]));

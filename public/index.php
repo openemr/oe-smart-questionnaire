@@ -17,7 +17,9 @@ require dirname(__DIR__) . '/src/bootstrap.php';
 
 use OpenEMR\SmartQuestionnaire\Config;
 use OpenEMR\SmartQuestionnaire\FhirException;
+use OpenEMR\SmartQuestionnaire\HomeVitals;
 use OpenEMR\SmartQuestionnaire\LaunchSession;
+use OpenEMR\SmartQuestionnaire\PatientRecord;
 use OpenEMR\SmartQuestionnaire\Refs;
 use OpenEMR\SmartQuestionnaire\ScopeCheck;
 use OpenEMR\SmartQuestionnaire\Session;
@@ -41,14 +43,28 @@ $appContext = Refs::appContext($token);
 $fhir = $session->fhir;
 $notices = [];
 
+// A signed-in patient starts from their home page, which lists the questionnaires. ?vitals=1 is
+// their Home vital signs form.
+$isPatient = $session->isPatient();
+$vitalsMode = $isPatient && isset($_GET['vitals']);
+if ($isPatient && !$vitalsMode && (!isset($_GET['q']) || isset($_GET['pick']))) {
+    header('Location: home.php?' . http_build_query(['lid' => $session->launchId]));
+    exit;
+}
+
 // The server can grant less than was asked for (consent unchecked, or scopes it drops). Say so
 // up front rather than letting the first save fail with a bare 401.
 $requestedScope = (string)($session->record['requested_scope'] ?? '');
-if ($requestedScope !== '' && is_string($token['scope'] ?? null)) {
+if ($isPatient) {
+    $grantNotice = $session->patientGrantNotice();
+    if ($grantNotice !== null) {
+        $notices[] = $grantNotice;
+    }
+} elseif ($requestedScope !== '' && is_string($token['scope'] ?? null)) {
     $missing = ScopeCheck::notGranted($requestedScope, $token['scope']);
     if ($missing !== []) {
         $notices[] = 'The server did not grant: ' . implode(', ', $missing) . '. '
-            . (preg_grep('~^user/QuestionnaireResponse\.~', $missing)
+            . (preg_grep('~^(user|patient)/QuestionnaireResponse\.~', $missing) !== []
                 ? 'Saving responses will fail until it does. Relaunch and leave those permissions checked. '
                     . (str_contains($requestedScope, 'QuestionnaireResponse.cu')
                         ? 'This client uses the v2 scope profile, which needs the OpenEMR consent-screen fix; on an OpenEMR '
@@ -92,8 +108,10 @@ if (is_array($patient)) {
 }
 $showBanner = ($token['need_patient_banner'] ?? true) !== false;
 
-$renderBanner = static function () use ($showBanner, $patientName, $patientMeta): void {
-    if ($showBanner) {
+$renderBanner = static function () use ($showBanner, $patientName, $patientMeta, $isPatient, $session): void {
+    if ($isPatient) {
+        echo View::patientBar($session, $patientName, false);
+    } elseif ($showBanner) {
         echo '<div class="sq-banner border rounded px-3 py-2 mb-3 d-flex flex-wrap align-items-center">'
             . '<strong class="mr-3">' . h($patientName) . '</strong>'
             . '<span class="small text-muted">' . h(implode(' · ', $patientMeta)) . '</span></div>';
@@ -106,7 +124,7 @@ $renderNotices = static function (array $notices): void {
 };
 
 // --- No questionnaire in context: let the user pick one -------------------------------------
-if ($questionnaireId === null) {
+if ($questionnaireId === null && !$vitalsMode) {
     try {
         $questionnaires = $fhir->search('Questionnaire', ['_count' => '100']);
     } catch (FhirException $exception) {
@@ -129,7 +147,7 @@ if ($questionnaireId === null) {
             echo '<a class="list-group-item list-group-item-action" href="index.php?'
                 . h(http_build_query(['lid' => $session->launchId, 'q' => $id])) . '">' . h((string)$title)
                 . (is_string($questionnaire['description'] ?? null)
-                    ? '<div class="small text-muted">' . h($questionnaire['description']) . '</div>'
+                    ? '<div class="small text-muted">' . h(View::excerpt($questionnaire['description'])) . '</div>'
                     : '')
                 . '</a>';
         }
@@ -140,24 +158,59 @@ if ($questionnaireId === null) {
 }
 
 // --- Load the questionnaire and this patient's responses to it ------------------------------
-try {
-    $questionnaire = $fhir->read('Questionnaire', $questionnaireId);
-} catch (FhirException $exception) {
-    View::error(
-        $exception->getHttpStatus() === 404 ? 404 : 502,
-        'Questionnaire unavailable',
-        "Questionnaire/{$questionnaireId} could not be read: " . $exception->getMessage()
-    );
+$questionnaire = null;
+if (!$vitalsMode) {
+    try {
+        $questionnaire = $fhir->read('Questionnaire', (string)$questionnaireId);
+    } catch (FhirException $exception) {
+        View::error(
+            $exception->getHttpStatus() === 404 ? 404 : 502,
+            'Questionnaire unavailable',
+            "Questionnaire/{$questionnaireId} could not be read: " . $exception->getMessage()
+        );
+    }
+    if (($questionnaire['resourceType'] ?? null) !== 'Questionnaire') {
+        View::error(502, 'Questionnaire unavailable', 'The server did not return a Questionnaire.');
+    }
+    $vitalsMode = $isPatient && HomeVitals::identifies($questionnaire);
 }
-if (($questionnaire['resourceType'] ?? null) !== 'Questionnaire') {
-    View::error(502, 'Questionnaire unavailable', 'The server did not return a Questionnaire.');
+
+// How a patient's readings travel: as vital-sign Observations when the server grants that, else
+// as answers to the practice's Home vital signs Questionnaire, held for staff review.
+$transport = 'questionnaire';
+if ($vitalsMode) {
+    $homeVitals = null;
+    try {
+        $homeVitals = $questionnaire ?? HomeVitals::find($fhir);
+    } catch (FhirException $exception) {
+        $notices[] = 'The Home vital signs questionnaire could not be looked up: ' . $exception->getMessage();
+    }
+    if ($session->canCreate('Observation')) {
+        $transport = 'observation';
+    } elseif ($homeVitals === null || !$session->canCreate('QuestionnaireResponse')) {
+        View::error(409, 'Home vital signs unavailable', $homeVitals === null
+            ? 'Your practice has not set up home vital signs yet. Ask them to add the "Home vital signs" questionnaire.'
+            : ($session->isPublicClient()
+                ? 'This practice is not accepting information from public apps right now. Sign out and use the confidential patient sign-in.'
+                : 'This practice is not accepting information from apps right now.'));
+    }
+    $questionnaire = $homeVitals ?? HomeVitals::bundled();
+    $questionnaireId = is_string($homeVitals['id'] ?? null) ? $homeVitals['id'] : null;
 }
 
 try {
-    $responses = $session->responsesFor($questionnaireId);
+    $responses = $questionnaireId !== null ? $session->responsesFor($questionnaireId) : [];
 } catch (FhirException $exception) {
     $responses = [];
     $notices[] = 'Previous responses could not be listed: ' . $exception->getMessage();
+}
+$readings = [];
+if ($vitalsMode && $session->canRead('Observation')) {
+    try {
+        $readings = PatientRecord::vitalSigns($session, 10);
+    } catch (FhirException $exception) {
+        $notices[] = 'Recent vital signs could not be read: ' . $exception->getMessage();
+    }
 }
 
 $contextResponseId = $launchContext['response'];
@@ -193,13 +246,24 @@ if ($contextResponseId !== null) {
     }
 }
 
+// A patient app may change only its own writes still held for review; the server refuses the rest.
+$editableResponses = $isPatient ? array_filter($responses, [LaunchSession::class, 'isHeld']) : $responses;
 $session->remember([
     'questionnaire_id' => $questionnaireId,
-    'editable_ids' => array_values(array_filter(array_column($responses, 'id'), 'is_string')),
+    'vitals_mode' => $vitalsMode,
+    'editable_ids' => array_values(array_filter(array_column($editableResponses, 'id'), 'is_string')),
 ]);
 
 $title = (string)($questionnaire['title'] ?? $questionnaire['name'] ?? 'Questionnaire');
+$homeUrl = 'home.php?' . http_build_query(['lid' => $session->launchId]);
 $payload = [
+    'patientMode' => $isPatient,
+    // Whether this token may send what the form saves; without it the form opens read-only.
+    'canSend' => $transport === 'observation' || $session->canCreate('QuestionnaireResponse'),
+    // Change and Withdraw on an earlier response update a QuestionnaireResponse, whatever new readings travel as.
+    'canChangeResponses' => $session->canUpdate('QuestionnaireResponse'),
+    'transport' => $transport,
+    'homeUrl' => $isPatient ? $homeUrl : null,
     'launchId' => $session->launchId,
     'csrf' => $session->csrf(),
     'questionnaire' => $questionnaire,
@@ -221,6 +285,13 @@ View::header($title);
 $renderBanner();
 $renderNotices($notices);
 ?>
+<?php if ($isPatient) : ?>
+    <?php if ($vitalsMode && $transport === 'observation') : ?>
+        <div class="alert alert-info small">Your readings are sent as vital signs. Your care team reviews them before they go in your record.</div>
+    <?php elseif ($vitalsMode) : ?>
+        <div class="alert alert-info small">Your readings are sent to your care team, who review them before they go in your record.</div>
+    <?php endif; ?>
+<?php endif; ?>
 <div class="card mb-3">
     <div class="card-header d-flex flex-wrap justify-content-between align-items-center">
         <div class="mr-2">
@@ -231,6 +302,7 @@ $renderNotices($notices);
         <div class="btn-group btn-group-sm mt-2 mt-md-0" role="group" aria-label="Assessment actions">
             <button type="button" class="btn btn-outline-primary" id="sq-new">Start new</button>
             <button type="button" class="btn btn-outline-secondary" id="sq-amend" hidden>Amend</button>
+            <button type="button" class="btn btn-outline-danger" id="sq-withdraw" hidden>Withdraw</button>
             <button type="button" class="btn btn-secondary" id="sq-draft" disabled>Save draft</button>
             <button type="button" class="btn btn-primary" id="sq-complete" disabled>Complete</button>
         </div>
@@ -244,15 +316,38 @@ $renderNotices($notices);
     </div>
 </div>
 
+<?php if ($vitalsMode) : ?>
+    <div class="card mb-3">
+        <div class="card-header"><strong>Your recent vital signs</strong></div>
+        <?php if ($readings === []) : ?>
+            <div class="card-body small text-muted"><?= $session->canRead('Observation') ? 'None in your record yet.' : 'Not shared with this app.' ?></div>
+        <?php else : ?>
+            <table class="table table-sm mb-0">
+                <tbody>
+                <?php foreach ($readings as $row) : ?>
+                    <tr>
+                        <td class="small text-muted"><?= h(View::when($row['when'])) ?></td>
+                        <td><?= h($row['name']) ?></td><td class="text-right"><?= h($row['value']) ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
+    </div>
+<?php endif; ?>
+
+<?php // Earlier held responses stay reachable (to change or withdraw) even when new readings go as Observations. ?>
+<?php if (!($vitalsMode && $transport === 'observation' && $responses === [])) : ?>
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
-        <strong>Responses for this patient</strong>
-        <?php if ($payload['canPick']) : ?>
+        <strong><?= $isPatient ? 'What you sent' : 'Responses for this patient' ?></strong>
+        <?php if ($payload['canPick'] && !$isPatient) : ?>
             <a class="small" href="index.php?<?= h(http_build_query(['lid' => $session->launchId, 'pick' => '1'])) ?>">Choose another questionnaire</a>
         <?php endif; ?>
     </div>
     <ul class="list-group list-group-flush" id="sq-history"></ul>
 </div>
+<?php endif; ?>
 
 <?php $jsonFlags = JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT; ?>
 <script type="application/json" id="sq-data"><?= json_encode($payload, $jsonFlags) ?></script>

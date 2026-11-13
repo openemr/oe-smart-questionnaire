@@ -87,6 +87,39 @@ final class Config
         return self::appUrl('launch.php');
     }
 
+    /**
+     * The launch URI the patient portal client is registered with. OpenEMR's portal appends
+     * launch, iss and aud to it, so launch.php knows a portal launch from a staff EHR launch.
+     */
+    public static function portalLaunchUri(): string
+    {
+        return self::launchUri() . '?mode=portal';
+    }
+
+    /**
+     * Whether a request's Host is app_url's host (and port). The sign-in state lives in a cookie
+     * for the host the launch was opened on, but the server sends the browser back to app_url's
+     * callback.php; opened on another name (https://localhost/… when app_url is a domain), the
+     * callback gets no cookie and the sign-in fails. A request with no Host is taken as matching.
+     */
+    public static function isAppHost(?string $requestHost): bool
+    {
+        if ($requestHost === null || $requestHost === '') {
+            return true;
+        }
+        $url = parse_url(self::appUrl());
+        $scheme = strtolower((string)($url['scheme'] ?? 'https'));
+        $host = strtolower((string)($url['host'] ?? ''));
+        $port = (int)($url['port'] ?? ($scheme === 'http' ? 80 : 443));
+        $request = strtolower(trim(explode(',', $requestHost)[0]));
+        if (preg_match('/^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/', $request, $m) !== 1) {
+            return true;
+        }
+        $requestPort = isset($m[2]) ? (int)$m[2] : ($scheme === 'http' ? 80 : 443);
+
+        return $m[1] === $host && $requestPort === $port;
+    }
+
     public static function normalizeIssuer(string $issuer): string
     {
         return rtrim(trim($issuer), '/');
@@ -117,6 +150,71 @@ final class Config
     public static function clientFor(string $issuer): ?array
     {
         return self::clients()[self::normalizeIssuer($issuer)] ?? null;
+    }
+
+    /**
+     * The public patient client registered for this server (no secret; PKCE only), kept beside
+     * the confidential client in its record under "public". Null when none is registered.
+     *
+     * @return array<string, mixed>|null
+     */
+    public static function publicClientFor(string $issuer): ?array
+    {
+        $public = self::clientFor($issuer)['public'] ?? null;
+
+        return is_array($public) && is_string($public['client_id'] ?? null) && $public['client_id'] !== '' ? $public : null;
+    }
+
+    /**
+     * Saves (or with null, removes) the public patient client for a registered server.
+     *
+     * @param array<string, mixed>|null $public
+     */
+    public static function savePublicClient(string $issuer, ?array $public): void
+    {
+        $client = self::clientFor($issuer);
+        if ($client === null) {
+            throw new RuntimeException("Register the confidential client for {$issuer} first.");
+        }
+        if ($public === null) {
+            unset($client['public']);
+        } else {
+            $client['public'] = $public;
+        }
+        self::saveClient($issuer, $client);
+    }
+
+    /**
+     * The patient portal client registered for this server (confidential, `launch` plus patient/
+     * scopes, launched from OpenEMR's patient portal), kept in the server's record under "portal".
+     * Null when none is registered.
+     *
+     * @return array<string, mixed>|null
+     */
+    public static function portalClientFor(string $issuer): ?array
+    {
+        $portal = self::clientFor($issuer)['portal'] ?? null;
+
+        return is_array($portal) && is_string($portal['client_id'] ?? null) && $portal['client_id'] !== '' ? $portal : null;
+    }
+
+    /**
+     * Saves (or with null, removes) the patient portal client for a registered server.
+     *
+     * @param array<string, mixed>|null $portal
+     */
+    public static function savePortalClient(string $issuer, ?array $portal): void
+    {
+        $client = self::clientFor($issuer);
+        if ($client === null) {
+            throw new RuntimeException("Register the confidential client for {$issuer} first.");
+        }
+        if ($portal === null) {
+            unset($client['portal']);
+        } else {
+            $client['portal'] = $portal;
+        }
+        self::saveClient($issuer, $client);
     }
 
     /** @param array<string, mixed> $client */

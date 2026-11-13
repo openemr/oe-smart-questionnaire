@@ -58,4 +58,73 @@ final class View
         echo json_encode($payload, JSON_UNESCAPED_SLASHES);
         exit;
     }
+
+    /**
+     * A FHIR date or dateTime for people: "Today 3:05 pm", "Yesterday 9:12 am", "Mar 3, 2026".
+     * A date without a time shows no time; an unreadable value is returned as is.
+     */
+    public static function when(string $value, ?int $now = null): string
+    {
+        $time = strtotime($value);
+        if ($value === '' || $time === false) {
+            return $value;
+        }
+        $now ??= time();
+        $hasTime = str_contains($value, 'T');
+        $day = date('Y-m-d', $time);
+        $label = match ($day) {
+            date('Y-m-d', $now) => 'Today',
+            date('Y-m-d', strtotime('-1 day', $now)) => 'Yesterday',
+            default => date('M j, Y', $time),
+        };
+        if (!$hasTime) {
+            return $label;
+        }
+
+        return $label . ' ' . date('g:i a', $time);
+    }
+
+    /**
+     * The bar across the top of a patient's pages: who is signed in, where, through which kind of
+     * client, a way home (when not on the home page) and sign out.
+     */
+    public static function patientBar(LaunchSession $session, string $patientName, bool $onHome, string $meta = ''): string
+    {
+        $host = (string)(parse_url((string)$session->record['issuer'], PHP_URL_HOST) ?: '');
+        [$title, $label] = match (true) {
+            $session->isPortalLaunch() => ['Opened from your patient portal', 'patient portal'],
+            $session->isPublicClient() => ['Signed in with the public patient client: no secret, PKCE only', 'public app'],
+            default => ['Signed in with the confidential client: this app holds a client secret', 'confidential app'],
+        };
+        $kind = '<span class="badge badge-light border" title="' . h($title) . '">' . h($label) . '</span>';
+
+        return '<nav class="sq-banner sq-patient-bar border rounded px-3 py-2 mb-3 d-flex flex-wrap align-items-center justify-content-between">'
+            . '<div class="mr-3"><strong>' . h($patientName) . '</strong>'
+            . ($meta !== '' ? '<span class="small text-muted ml-2">' . h($meta) . '</span>' : '')
+            . '<div class="small text-muted">Signed in to ' . h($host) . ' ' . $kind . '</div></div>'
+            . '<div class="d-flex align-items-center">'
+            . ($onHome ? '' : '<a class="btn btn-sm btn-link" href="home.php?' . h(http_build_query(['lid' => $session->launchId])) . '">My health</a>')
+            . '<form method="post" action="signout.php" class="mb-0">'
+            . '<input type="hidden" name="lid" value="' . h($session->launchId) . '">'
+            . '<input type="hidden" name="csrf" value="' . h($session->csrf()) . '">'
+            . '<button type="submit" class="btn btn-sm btn-outline-secondary">Sign out</button></form>'
+            . '</div></nav>';
+    }
+
+    /**
+     * The first paragraph of a long text, cut at a word near $max characters. Questionnaire
+     * descriptions can be pages of clinician instructions (PHQ-9's is), too long for a list.
+     */
+    public static function excerpt(string $text, int $max = 160): string
+    {
+        $paragraphs = preg_split('/\R/u', trim($text), 2);
+        $first = trim(is_array($paragraphs) ? $paragraphs[0] : $text);
+        if (mb_strlen($first) <= $max) {
+            return $first;
+        }
+        $cut = mb_substr($first, 0, $max);
+        $space = mb_strrpos($cut, ' ');
+
+        return rtrim($space !== false && $space > $max / 2 ? mb_substr($cut, 0, $space) : $cut, " ,.;:") . '…';
+    }
 }

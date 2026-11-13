@@ -147,6 +147,20 @@ final class ScopeCheck
     }
 
     /**
+     * The scopes in the list that create or update (v2 c/u, v1 .write or .*).
+     *
+     * @param list<string> $scopes
+     * @return list<string>
+     */
+    public static function writes(array $scopes): array
+    {
+        return array_values(array_filter($scopes, static function (string $scope): bool {
+            $parsed = self::parse($scope);
+            return $parsed !== null && strpbrk($parsed['perms'], 'cu') !== false;
+        }));
+    }
+
+    /**
      * "user/QuestionnaireResponse.cu" → key "user/QuestionnaireResponse", perms "cu".
      * v1 .read/.write/.* are normalized to their v2 permission sets.
      *

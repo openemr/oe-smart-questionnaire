@@ -28,3 +28,56 @@ body {
 .active-response {
   background: rgb(0 123 255 / 6%);
 }
+
+/* Sign-in page and patient pages */
+main.container-fluid {
+  max-width: 72rem;
+}
+
+.sq-hero p {
+  max-width: 48rem;
+}
+
+.sq-server .card-header {
+  background: #fff;
+}
+
+.sq-kind {
+  font-size: 0.75em;
+  font-weight: normal;
+  opacity: 0.85;
+  margin-left: 0.25rem;
+  padding: 0 0.3rem;
+  border: 1px solid currentcolor;
+  border-radius: 0.2rem;
+}
+
+.sq-patient-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.sq-chip {
+  font-size: 0.85em;
+  font-weight: normal;
+  white-space: normal;
+  text-align: left;
+}
+
+.card-header {
+  background: #fbfbfc;
+}
+
+.sq-actions {
+  min-width: 20rem;
+}
+
+.sq-actions form {
+  margin-bottom: 0.25rem;
+}
+
+.sq-scroll {
+  max-height: 28rem;
+  overflow-y: auto;
+}

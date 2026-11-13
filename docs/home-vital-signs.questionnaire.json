@@ -1,0 +1,255 @@
+{
+    "resourceType": "Questionnaire",
+    "url": "http://open-emr.org/fhir/Questionnaire/home-vital-signs",
+    "identifier": [
+        {
+            "system": "urn:ietf:rfc:3986",
+            "value": "http://open-emr.org/fhir/Questionnaire/home-vital-signs"
+        }
+    ],
+    "version": "1",
+    "name": "HomeVitalSigns",
+    "title": "Home vital signs",
+    "status": "active",
+    "subjectType": [
+        "Patient"
+    ],
+    "description": "Readings a patient takes at home. Fill in the ones you took; leave the rest blank.",
+    "item": [
+        {
+            "linkId": "taken",
+            "text": "When did you take these readings?",
+            "type": "dateTime",
+            "required": true
+        },
+        {
+            "linkId": "bp",
+            "text": "Blood pressure",
+            "type": "group",
+            "code": [
+                {
+                    "system": "http://loinc.org",
+                    "code": "85354-9",
+                    "display": "Blood pressure panel with all children optional"
+                }
+            ],
+            "item": [
+                {
+                    "linkId": "bp-systolic",
+                    "text": "Systolic (top number)",
+                    "type": "integer",
+                    "code": [
+                        {
+                            "system": "http://loinc.org",
+                            "code": "8480-6",
+                            "display": "Systolic blood pressure"
+                        }
+                    ],
+                    "extension": [
+                        {
+                            "url": "http://hl7.org/fhir/StructureDefinition/questionnaire-unit",
+                            "valueCoding": {
+                                "system": "http://unitsofmeasure.org",
+                                "code": "mm[Hg]",
+                                "display": "mmHg"
+                            }
+                        },
+                        {
+                            "url": "http://hl7.org/fhir/StructureDefinition/minValue",
+                            "valueInteger": 50
+                        },
+                        {
+                            "url": "http://hl7.org/fhir/StructureDefinition/maxValue",
+                            "valueInteger": 300
+                        }
+                    ]
+                },
+                {
+                    "linkId": "bp-diastolic",
+                    "text": "Diastolic (bottom number)",
+                    "type": "integer",
+                    "code": [
+                        {
+                            "system": "http://loinc.org",
+                            "code": "8462-4",
+                            "display": "Diastolic blood pressure"
+                        }
+                    ],
+                    "extension": [
+                        {
+                            "url": "http://hl7.org/fhir/StructureDefinition/questionnaire-unit",
+                            "valueCoding": {
+                                "system": "http://unitsofmeasure.org",
+                                "code": "mm[Hg]",
+                                "display": "mmHg"
+                            }
+                        },
+                        {
+                            "url": "http://hl7.org/fhir/StructureDefinition/minValue",
+                            "valueInteger": 20
+                        },
+                        {
+                            "url": "http://hl7.org/fhir/StructureDefinition/maxValue",
+                            "valueInteger": 200
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "linkId": "heart-rate",
+            "text": "Heart rate (pulse)",
+            "type": "integer",
+            "code": [
+                {
+                    "system": "http://loinc.org",
+                    "code": "8867-4",
+                    "display": "Heart rate"
+                }
+            ],
+            "extension": [
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/questionnaire-unit",
+                    "valueCoding": {
+                        "system": "http://unitsofmeasure.org",
+                        "code": "/min",
+                        "display": "beats/minute"
+                    }
+                },
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/minValue",
+                    "valueInteger": 20
+                },
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/maxValue",
+                    "valueInteger": 300
+                }
+            ]
+        },
+        {
+            "linkId": "weight",
+            "text": "Weight",
+            "type": "decimal",
+            "code": [
+                {
+                    "system": "http://loinc.org",
+                    "code": "29463-7",
+                    "display": "Body weight"
+                }
+            ],
+            "extension": [
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/questionnaire-unit",
+                    "valueCoding": {
+                        "system": "http://unitsofmeasure.org",
+                        "code": "[lb_av]",
+                        "display": "lb"
+                    }
+                },
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/minValue",
+                    "valueDecimal": 1
+                },
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/maxValue",
+                    "valueDecimal": 1000
+                }
+            ]
+        },
+        {
+            "linkId": "temperature",
+            "text": "Temperature",
+            "type": "decimal",
+            "code": [
+                {
+                    "system": "http://loinc.org",
+                    "code": "8310-5",
+                    "display": "Body temperature"
+                }
+            ],
+            "extension": [
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/questionnaire-unit",
+                    "valueCoding": {
+                        "system": "http://unitsofmeasure.org",
+                        "code": "[degF]",
+                        "display": "°F"
+                    }
+                },
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/minValue",
+                    "valueDecimal": 90
+                },
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/maxValue",
+                    "valueDecimal": 110
+                }
+            ]
+        },
+        {
+            "linkId": "spo2",
+            "text": "Oxygen level (pulse oximeter)",
+            "type": "integer",
+            "code": [
+                {
+                    "system": "http://loinc.org",
+                    "code": "59408-5",
+                    "display": "Oxygen saturation in Arterial blood by Pulse oximetry"
+                }
+            ],
+            "extension": [
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/questionnaire-unit",
+                    "valueCoding": {
+                        "system": "http://unitsofmeasure.org",
+                        "code": "%",
+                        "display": "%"
+                    }
+                },
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/minValue",
+                    "valueInteger": 50
+                },
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/maxValue",
+                    "valueInteger": 100
+                }
+            ]
+        },
+        {
+            "linkId": "resp-rate",
+            "text": "Breaths per minute",
+            "type": "integer",
+            "code": [
+                {
+                    "system": "http://loinc.org",
+                    "code": "9279-1",
+                    "display": "Respiratory rate"
+                }
+            ],
+            "extension": [
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/questionnaire-unit",
+                    "valueCoding": {
+                        "system": "http://unitsofmeasure.org",
+                        "code": "/min",
+                        "display": "breaths/minute"
+                    }
+                },
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/minValue",
+                    "valueInteger": 4
+                },
+                {
+                    "url": "http://hl7.org/fhir/StructureDefinition/maxValue",
+                    "valueInteger": 80
+                }
+            ]
+        },
+        {
+            "linkId": "notes",
+            "text": "Anything else your care team should know?",
+            "type": "text"
+        }
+    ]
+}

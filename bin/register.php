@@ -9,6 +9,9 @@
  *   php bin/register.php --iss=https://…/fhir         register with a FHIR base not in config
  *   php bin/register.php --site=localhost --check     verify discovery, scopes, secret and redirect URI
  *   php bin/register.php --site=localhost --repair    re-sync a saved secret that no longer matches
+ *   php bin/register.php --site=localhost --public    add (or replace) the public patient client:
+ *                                                     no secret, PKCE only, patient/ scopes only
+ *   php bin/register.php --site=localhost --forget-public   forget the saved public patient client
  *   php bin/register.php --site=localhost --client-id=… [--client-secret=…]
  *                                                     record a client made in OpenEMR's UI
  *   [--scopes=v1|v2]                                  scope profile (default: the site's, else v1);
@@ -39,7 +42,8 @@ use OpenEMR\SmartQuestionnaire\HttpClient;
 use OpenEMR\SmartQuestionnaire\Registrar;
 use OpenEMR\SmartQuestionnaire\Sites;
 
-$options = getopt('', ['iss:', 'site:', 'all', 'list', 'check', 'repair', 'scopes:', 'client-id:', 'client-secret:', 'registration-endpoint:', 'help']);
+$options = getopt('', ['iss:', 'site:', 'all', 'list', 'check', 'repair', 'scopes:', 'client-id:', 'client-secret:',
+    'registration-endpoint:', 'public', 'forget-public', 'portal', 'forget-portal', 'help']);
 $options = is_array($options) ? $options : [];
 $usage = static function (int $code): never {
     $text = <<<TXT
@@ -47,6 +51,8 @@ Usage:
   php bin/register.php --list
   php bin/register.php --all
   php bin/register.php --site=<name> | --iss=<FHIR base URL>  [--check | --repair] [--scopes=v1|v2] [--registration-endpoint=<url>]
+  php bin/register.php --site=<name> | --iss=<FHIR base URL>  --public | --forget-public
+  php bin/register.php --site=<name> | --iss=<FHIR base URL>  --portal | --forget-portal
   php bin/register.php --site=<name> | --iss=<FHIR base URL>  --client-id=<id> [--client-secret=<secret>]
 
 TXT;
@@ -76,7 +82,9 @@ if (isset($options['list'])) {
         $client = $clients[$site['iss']] ?? null;
         $profile = \OpenEMR\SmartQuestionnaire\ScopeProfiles::forClient($client, $site)['profile'];
         fwrite(STDOUT, str_pad($site['name'], 24) . ($client === null ? 'not registered' : 'client ' . $client['client_id'])
-            . " ({$profile} scopes)\n    {$site['iss']}\n");
+            . " ({$profile} scopes)"
+            . (Config::publicClientFor($site['iss']) !== null ? ', public patient client ' . Config::publicClientFor($site['iss'])['client_id'] : '')
+            . "\n    {$site['iss']}\n");
     }
     foreach (array_diff(array_keys($clients), array_column(Sites::all(), 'iss')) as $issuer) {
         fwrite(STDOUT, str_pad('(no site)', 24) . 'client ' . $clients[$issuer]['client_id'] . "\n    {$issuer}\n");
@@ -136,6 +144,62 @@ if (isset($options['repair'])) {
         fwrite(STDERR, '✗ ' . $exception->getMessage() . "\n");
         exit(1);
     }
+}
+
+if (isset($options['public'])) {
+    try {
+        $record = $registrar->registerPublic($issuer, $siteName, $endpointOverride);
+    } catch (Throwable $exception) {
+        fwrite(STDERR, '✗ ' . $exception->getMessage() . "
+");
+        exit(1);
+    }
+    fwrite(STDOUT, "✓ {$label}: public patient client {$record['client_id']} (no secret; PKCE only)
+  scopes: {$record['patient_scopes']}
+  note: {$record['note']}
+"
+        . (isset($record['replaced_client_id']) ? "  replaces {$record['replaced_client_id']} — disable the old client in OpenEMR
+" : ''));
+    exit(0);
+}
+
+if (isset($options['forget-public'])) {
+    $public = Config::publicClientFor($issuer);
+    if ($public === null) {
+        fwrite(STDOUT, "- {$label}: no public patient client saved
+");
+        exit(0);
+    }
+    Config::savePublicClient($issuer, null);
+    fwrite(STDOUT, "✓ {$label}: forgot public patient client {$public['client_id']} — disable it in OpenEMR if unused
+");
+    exit(0);
+}
+
+if (isset($options['portal'])) {
+    try {
+        $record = $registrar->registerPortal($issuer, $siteName, $endpointOverride);
+    } catch (Throwable $exception) {
+        fwrite(STDERR, '✗ ' . $exception->getMessage() . "\n");
+        exit(1);
+    }
+    fwrite(STDOUT, "✓ {$label}: patient portal client {$record['client_id']}\n"
+        . "  scopes: {$record['patient_scopes']}\n"
+        . "  launch URI: " . Config::portalLaunchUri() . "\n"
+        . "  note: {$record['note']}\n"
+        . (isset($record['replaced_client_id']) ? "  replaces {$record['replaced_client_id']} — disable the old client in OpenEMR\n" : ''));
+    exit(0);
+}
+
+if (isset($options['forget-portal'])) {
+    $portal = Config::portalClientFor($issuer);
+    if ($portal === null) {
+        fwrite(STDOUT, "- {$label}: no patient portal client saved\n");
+        exit(0);
+    }
+    Config::savePortalClient($issuer, null);
+    fwrite(STDOUT, "✓ {$label}: forgot patient portal client {$portal['client_id']} — disable it in OpenEMR if unused\n");
+    exit(0);
 }
 
 if (is_string($options['client-id'] ?? null)) {

@@ -59,6 +59,12 @@ final class LaunchStore
         }
     }
 
+    /** Drops a launch and its token (sign out). */
+    public static function forget(string $launchId): void
+    {
+        unset($_SESSION[self::KEY][$launchId]);
+    }
+
     public static function bindState(string $state, string $launchId): void
     {
         $_SESSION[self::STATE_KEY][$state] = $launchId;

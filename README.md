@@ -26,6 +26,25 @@ native FHIR Questionnaire runtime from [openemr/openemr#12880](https://github.co
   - `continue` resumes the draft.
   - `review` opens a finished response read-only.
 - **Standalone launch.** Pick a patient in OpenEMR's picker, then a questionnaire.
+- **Patient sign-in.** A patient signs in with OpenEMR's *Patient Login* and gets their own home page:
+  - **Record home vital signs**: blood pressure, pulse, weight, temperature, oxygen level, breathing rate.
+  - **Answer questionnaires** for the care team.
+  - **See what they sent** and whether it is *waiting for review* or *in your record*; change or
+    withdraw it until staff decide.
+  - **Recent vital signs, allergies and conditions** from their record.
+  - Through the app's **confidential** client, or a **public** patient client (no secret, PKCE
+    only, like a phone app) registered beside it, to try both kinds of client against OpenEMR's
+    *Patient App FHIR Writes* setting.
+
+  With **Patient App FHIR Writes** on, OpenEMR holds everything a patient app sends for staff review
+  (*Miscellaneous → Patient App Submissions*). It accepts QuestionnaireResponse today, so readings go
+  as answers to the practice's *Home vital signs* questionnaire. Once a server grants
+  `patient/Observation.cu`, the app sends the same readings as vital-sign Observations, with no
+  change to the form.
+- **Patient portal launch.** With an OpenEMR that has the portal SMART launcher
+  ([openemr/openemr#7115](https://github.com/openemr/openemr/issues/7115)), patients open the app
+  from the portal's **Health Apps** tile and land on their home page. It uses a third, confidential
+  *patient portal* client (admin *Add portal client*, or `php bin/register.php --site=<name> --portal`).
 - **Draft, complete, amend.** The first save creates the QuestionnaireResponse and later saves update
   it, so one assessment never becomes duplicates. Required items are validated before completion,
   and finished responses reopen read-only with *Amend*.
@@ -46,7 +65,7 @@ native FHIR Questionnaire runtime from [openemr/openemr#12880](https://github.co
 ## Security at a glance
 
 - It is a confidential client. The access token stays server-side, per launch, and the browser never
-  sees it.
+  sees it. The optional public patient client has no secret, but its token is kept server-side too.
 - OAuth uses PKCE S256 with a one-time `state`. The app only launches against servers it is
   registered with.
 - The app, not the browser, decides the patient and questionnaire of every write. Updates are limited
@@ -107,6 +126,8 @@ config.sample.php       copy to config.php
 ## OpenEMR scope notes
 
 OpenEMR only grants `user/` scopes to confidential clients, which is why the app registers as one.
+A public client gets `patient/` scopes only, and may send only when Patient App FHIR Writes is
+*Confidential and public apps*; otherwise OpenEMR leaves its write scopes out of the token.
 
 Current OpenEMR also has a consent-screen limitation. Registration only accepts SMART v2 reads and
 writes as separate scopes (`.rs`, `.cud`). The consent screen then merges them back into one scope

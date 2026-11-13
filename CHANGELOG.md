@@ -10,9 +10,58 @@ First public release (planned as 1.0.0).
 
 ### Added
 
+- **Patient portal launch** (`launch.php?mode=portal`), for OpenEMR's portal SMART launcher
+  (openemr/openemr#7115): the portal's **Health Apps** tile opens the app with the portal patient's
+  launch, and the patient lands on the same home page as patient sign-in, labeled *patient portal*.
+  - A third client per server, confidential, with `launch` and the patient scopes (`launch` in place
+    of `launch/patient`) and the portal launch URI: admin *Add portal client* / *Re-register portal* /
+    *Forget portal*, or `php bin/register.php --site=<name> --portal` / `--forget-portal`.
+  - Re-registering the confidential client keeps it; **Check** confirms it and its secret.
+- **Patient sign-in** (`launch.php?mode=patient`, OpenEMR's *Patient Login*), for OpenEMR's patient
+  app writes (openemr/openemr#15138, #15144, #15162):
+  - A home page with what the patient can do and what the server accepts: record home vital signs,
+    answer questionnaires, what they sent (*waiting for review* / *in your record*), recent vital
+    signs, allergies and conditions.
+  - What a patient sends is held by OpenEMR for staff review; the app shows the held-for-review tag,
+    lets the patient change or **withdraw** (entered-in-error) a held response, and keeps responses in
+    the record view-only.
+  - **Home vital signs** (`docs/home-vital-signs.questionnaire.json`, LOINC/UCUM per item): sent as a
+    held QuestionnaireResponse today; sent as vital-sign Observations (BP as one panel) when the token
+    grants `patient/Observation.cu`, with the same form. The app recognizes it by title plus its
+    canonical as `url` or `identifier` (`urn:ietf:rfc:3986`): OpenEMR ignores a client `url` on
+    create and publishes its own.
+    The server refuses a value outside its item's `minValue`/`maxValue`. If some readings are saved
+    and a later one fails, the browser is told which went, and sending again sends only the rest.
+  - Registration adds the patient scopes the server publishes (v2 only, e.g.
+    `patient/QuestionnaireResponse.cu`), so a site with patient writes off still registers. Check
+    reports when the server's offer has changed and the app should be registered again.
+  - Long questionnaire descriptions are shortened to their first sentences on the home page.
+  - **Public patient client** beside the confidential one (admin *Add public client*, or
+    `php bin/register.php --site=<name> --public`): `application_type: public`, no secret, PKCE S256,
+    patient scopes only, no launch URI, so OpenEMR enables it by itself. The sign-in page offers
+    *Patient sign-in* as **confidential** and **public**; the callback exchanges a public sign-in's code
+    without a secret. Patient App FHIR Writes decides what each may send: under *Confidential apps*
+    OpenEMR leaves a public client's write scopes out, and the patient sees a read-only home and forms
+    with a button to the confidential sign-in instead of a failed save. **Check** confirms the public
+    client has no secret on the server; re-registering the confidential client keeps it;
+    `--forget-public` / *Forget public* drop it.
+  - Patient pages share a top bar: name, server, *confidential app* / *public app*, **My health**
+    and **Sign out** (POST with the launch's CSRF token; forgets the launch and its token).
+  - Home page: each questionnaire shows *Not answered*, *Waiting for review* or *Answered*; a count of
+    what is waiting; vital signs grouped by day; allergies and conditions as chips; dates as
+    *Today 9:05 am* / *Yesterday* / *Mar 3, 2026*.
+  - Forms open read-only, without send buttons, when the token can't send what they save.
+  - Searches for the patient's responses never send `_sort`: OpenEMR adds held writes only to a
+    search by `_id`, `patient`, `subject` and `_count`.
 - **SMART launches**
+  - `launch.php` opened under a host name other than `app_url`'s (e.g. `https://localhost/…` with a
+    domain `app_url`) first redirects to `app_url`: OpenEMR returns to `app_url`'s `callback.php`, where
+    the first host's session cookie is not sent, and staff and patient sign-in failed with "Unknown or
+    already-used authorization state".
   - EHR launch from OpenEMR's FHIR Assessments, honoring `fhirContext` (Questionnaire, QuestionnaireResponse) and `appContext` actions `start`, `continue` and `review`.
   - Standalone launch with OpenEMR's patient picker and a questionnaire picker.
+  - The sign-in page lists each server as a card with patient (confidential, public) and staff
+    sign-in, and explains the difference between the two patient sign-ins.
 - **Questionnaire workspace**
   - Uses OpenEMR's native FHIR Questionnaire runtime (openemr/openemr#12880), vendored unmodified.
   - Runtime re-synced from openemr/openemr `master` at `2ee0a6a` (#14744, merged): broader SDC/R4 item coverage, per-instance repeats, QuestionnaireResponse provenance tags and translatable runtime strings.

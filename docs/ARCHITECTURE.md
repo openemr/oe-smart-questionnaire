@@ -105,6 +105,48 @@ After a `completed` or `amended` save, `app.js` posts
 `window.opener` or the framing parent, **targeted at the EHR's origin** (derived from `iss`). An
 OpenEMR page can listen for it to refresh its assessment list. Answers are never included.
 
+### 6. Patient sign-in
+
+`launch.php?mode=patient` asks for the client's stored `patient_scopes` (registration keeps only
+the `launch/patient` and `patient/` scopes the server publishes) and records the launch as
+`mode: patient`. The patient signs in with OpenEMR's *Patient Login*; the token's `patient` is
+their own record.
+
+With `&client=public` it uses the server's public patient client instead (`Config::publicClientFor()`,
+stored under `public` in the confidential client's record): its own client id and `patient_scopes`,
+and the launch is recorded with `client_type: public` so `callback.php` exchanges the code without a
+secret (PKCE only). `Registrar::registerPublic()` registers it with `application_type: public`, no
+`token_endpoint_auth_method` (OpenEMR rejects `none`; `public` is what makes it issue no secret) and
+no launch URI. Under Patient App FHIR Writes *Confidential apps*, OpenEMR drops a public client's
+write-only patient scopes at token time; `LaunchSession::patientGrantNotice()` explains that and
+`home.php` / `index.php` (`canSend`) turn read-only.
+
+`launch.php?mode=portal` is the patient portal client's launch URI (`Config::portalLaunchUri()`).
+OpenEMR's portal sends `launch`, `iss` and `aud` to it. The app uses the portal client
+(`Config::portalClientFor()`, stored under `portal` in the confidential client's record), asks for its
+`patient_scopes` (the patient scopes with `launch` in place of `launch/patient`, so the patient comes
+from the portal's launch), passes `launch` to authorize, and records the launch as `mode: patient`,
+`client_type: portal`. After sign-in it is a patient session like any other; `View::patientBar()`
+labels it *patient portal*. OpenEMR refuses the launch unless the signed-in patient is the one it
+names. `Registrar::registerPortal()` registers it as a confidential client (`application_type:
+private`, `client_secret_post`) with the portal launch URI.
+
+- `home.php` is the patient's landing page. What it offers follows the token
+  (`LaunchSession::canCreate()` / `canRead()`): Home vital signs when the server grants
+  Observation create or has the Home vital signs Questionnaire and grants QuestionnaireResponse
+  create; questionnaires; what the patient sent; recent vital signs, allergies, conditions.
+- OpenEMR holds a patient app's write for staff review and answers it (create, read, search) with
+  `meta.tag` `http://open-emr.org/fhir/CodeSystem/patient-write|held-for-review`
+  (`LaunchSession::isHeld()`). Only held responses join the launch's writable set: the server
+  refuses a patient's PUT on anything else. `api.php?action=withdraw` PUTs a held response back
+  with `status: entered-in-error`; OpenEMR then answers 410 for it. Approved, it keeps its id.
+- `LaunchSession::allResponses()` searches by `patient` and `_count` only and sorts locally,
+  because OpenEMR leaves held writes out of any search with other parameters.
+- Home vital signs is `index.php?vitals=1`, the same workspace. With `patient/Observation` create
+  granted, `api.php?action=vitals` turns the answers into vital-sign Observations
+  (`HomeVitals::toObservations()`: item LOINC codes and `questionnaire-unit` UCUM units; blood
+  pressure as one 85354-9 panel). Otherwise the response is saved like any other.
+
 ## Components
 
 | Class (`src/`) | Responsibility |
@@ -176,7 +218,7 @@ As a result, v2 read + write on the same resource can't survive current OpenEMR,
 3. `POST` the registration as a confidential client (`application_type: private`,
    `client_secret_post`) with `redirect_uris = [<app_url>/callback.php]` and
    `initiate_login_uri = <app_url>/launch.php`, which OpenEMR stores as the launch URI.
-4. Save the credentials and scopes.
+4. Save the credentials and scopes, keeping a public patient client already saved for the server.
 
 OpenEMR creates clients disabled and offers no delete API, so re-registering leaves the old client for
 an administrator to disable.
