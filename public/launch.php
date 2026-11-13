@@ -58,6 +58,9 @@ if (!is_string($issuer) || $issuer === '') {
         echo '<div class="alert alert-warning">No FHIR servers are registered yet. Register one on the '
             . '<a href="admin.php">administration page</a> or with <code>php bin/register.php</code>.</div>';
     } else {
+        // OpenEMR's smart-launch CI (tests/Tests/SmartLaunch/SmartLaunchQuestionnaireTest.php) looks
+        // for this heading to tell the registered-servers page from the "none registered" one.
+        echo '<h2 class="h6 text-muted mb-2">Choose a server for a standalone launch or patient sign-in</h2>';
         echo '<div class="row">';
         foreach ($clients as $registeredIssuer => $registeredClient) {
             $registeredIssuer = (string)$registeredIssuer;

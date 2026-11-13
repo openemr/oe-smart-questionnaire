@@ -373,6 +373,7 @@ check('re-registering the confidential client keeps the public one', $code === 0
     && ($clientsNow[$iss]['public']['client_id'] ?? null) === ($publicClient['client_id'] ?? '?'));
 
 $r = http('GET', "{$app}/launch.php", $jar);
+check('sign-in page keeps the server picker heading that OpenEMR smart-launch CI looks for', str_contains($r['body'], 'Choose a server for a standalone launch'));
 check('sign-in page offers confidential and public patient sign-in', str_contains($r['body'], 'mode=patient&amp;client=public')
     && str_contains($r['body'], 'Patient sign-in <span class="sq-kind">confidential</span>'));
 
