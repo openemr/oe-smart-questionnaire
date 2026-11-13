@@ -16,6 +16,8 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/src/bootstrap.php';
 
 use OpenEMR\SmartQuestionnaire\Config;
+use OpenEMR\SmartQuestionnaire\FhirClient;
+use OpenEMR\SmartQuestionnaire\FhirException;
 use OpenEMR\SmartQuestionnaire\HomeVitals;
 use OpenEMR\SmartQuestionnaire\LaunchSession;
 use OpenEMR\SmartQuestionnaire\Refs;
@@ -287,6 +289,36 @@ check('vitals: a value below the item minValue is refused', throws(fn() => HomeV
 check('vitals: a value inside the bounds is kept', count(HomeVitals::toObservations($homeVitals, ['item' => [
     ['linkId' => 'heart-rate', 'answer' => [['valueInteger' => 72]]],
 ]], 'p1')) === 1);
+// A partial vitals send and its retry; "123" becomes an int array key in PHP.
+$numeric = ['123' => ['code' => 'a'], 'heart-rate' => ['code' => 'b']];
+$calls = 0;
+/** Saves like the server, but fails the second reading. */
+$failSecond = static function (array $observation) use (&$calls): array {
+    if (++$calls === 2) {
+        throw new FhirException('POST Observation failed (HTTP 500)', 500);
+    }
+    return ['id' => 'o' . $calls] + $observation;
+};
+$first = HomeVitals::sendRemaining($numeric, [], $failSecond);
+check('vitals send: a numeric linkId is reported as a string', $first['sentKeys'] === ['123'] && $first['failure'] !== null);
+$saves = [];
+$retry = HomeVitals::sendRemaining($numeric, json_decode((string)json_encode($first['sentKeys']), true), static function (array $observation) use (&$saves): array {
+    $saves[] = $observation['code'];
+    return ['id' => 'x'] + $observation;
+});
+check('vitals send: the retry skips the numeric linkId already saved', $saves === ['b'] && $retry['sentKeys'] === ['123', 'heart-rate'] && $retry['failure'] === null);
+check('vitals send: an int in alreadySent still matches', HomeVitals::sendRemaining($numeric, [123, 'heart-rate'], static fn(array $o): array => $o)['saved'] === []);
+
+// Bundle next links, absolute or relative, stay under the FHIR base.
+$fb = 'https://ehr.test/apis/default/fhir';
+$fc = 'QuestionnaireResponse?patient=p1&_count=100';
+check('next link: absolute under the base', FhirClient::pathUnderBase($fb, $fc, $fb . '/QuestionnaireResponse?_offset=2') === 'QuestionnaireResponse?_offset=2');
+check('next link: relative to the request', FhirClient::pathUnderBase($fb, $fc, 'QuestionnaireResponse?_offset=2') === 'QuestionnaireResponse?_offset=2');
+check('next link: root-relative', FhirClient::pathUnderBase($fb, $fc, '/apis/default/fhir/QuestionnaireResponse?_offset=2') === 'QuestionnaireResponse?_offset=2');
+check('next link: query only', FhirClient::pathUnderBase($fb, $fc, '?patient=p1&_offset=2') === 'QuestionnaireResponse?patient=p1&_offset=2');
+check('next link: another host is not followed', FhirClient::pathUnderBase($fb, $fc, 'https://evil.test/apis/default/fhir/QuestionnaireResponse') === null);
+check('next link: outside the base path is not followed', FhirClient::pathUnderBase($fb, $fc, '/other/QuestionnaireResponse') === null
+    && FhirClient::pathUnderBase($fb, $fc, '../QuestionnaireResponse') === null);
 check('scope drift: same scopes say nothing', Registrar::patientScopeDrift('Public patient client', 'a b', 'a b') === []);
 check('scope drift: nothing offered says nothing', Registrar::patientScopeDrift('Public patient client', 'a b', '') === []);
 check('scope drift: names the client to register again', str_contains(Registrar::patientScopeDrift('Patient portal client', 'a', 'a b')[0] ?? '', 'Register the patient portal client again'));

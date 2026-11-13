@@ -85,6 +85,42 @@ final class HomeVitals
     }
 
     /**
+     * Saves the readings not already sent, in order, and stops at the first failure. Keys are
+     * linkIds; PHP turns a numeric one such as "123" into an int key, so both sides are compared
+     * and reported as strings.
+     *
+     * @param array<array-key, array<string, mixed>> $observations from toObservations()
+     * @param mixed $alreadySent the browser's list of keys a failed earlier attempt saved
+     * @param callable(array<string, mixed>): array<string, mixed> $save
+     * @return array{saved: list<array<string, mixed>>, sentKeys: list<string>, failure: ?FhirException}
+     */
+    public static function sendRemaining(array $observations, mixed $alreadySent, callable $save): array
+    {
+        $skip = [];
+        foreach (is_array($alreadySent) ? $alreadySent : [] as $key) {
+            if (is_string($key) || is_int($key)) {
+                $skip[] = (string)$key;
+            }
+        }
+        $saved = [];
+        $sentKeys = $skip;
+        foreach ($observations as $key => $observation) {
+            $key = (string)$key;
+            if (in_array($key, $skip, true)) {
+                continue;
+            }
+            try {
+                $saved[] = $save($observation);
+            } catch (FhirException $exception) {
+                return ['saved' => $saved, 'sentKeys' => $sentKeys, 'failure' => $exception];
+            }
+            $sentKeys[] = $key;
+        }
+
+        return ['saved' => $saved, 'sentKeys' => $sentKeys, 'failure' => null];
+    }
+
+    /**
      * The bundled definition, for rendering the form when only Observations will be sent.
      *
      * @return array<string, mixed>

@@ -72,7 +72,7 @@ final class FhirClient
         for ($page = 0; $page < $maxPages && $path !== null; $page++) {
             $bundle = $this->send('GET', $path);
             array_push($resources, ...self::entries($bundle, $type));
-            $path = $this->nextPath($bundle);
+            $path = $this->nextPath($bundle, $path);
         }
 
         return $resources;
@@ -102,18 +102,50 @@ final class FhirClient
      * or it points somewhere else.
      *
      * @param array<string, mixed> $bundle
+     * @param string $currentPath the path (under the base) of the request that returned $bundle
      */
-    private function nextPath(array $bundle): ?string
+    private function nextPath(array $bundle, string $currentPath): ?string
     {
-        $prefix = rtrim($this->baseUrl, '/') . '/';
         foreach (is_array($bundle['link'] ?? null) ? $bundle['link'] : [] as $link) {
             $url = is_array($link) && ($link['relation'] ?? null) === 'next' ? ($link['url'] ?? null) : null;
-            if (is_string($url) && str_starts_with($url, $prefix) && strlen($url) > strlen($prefix)) {
-                return substr($url, strlen($prefix));
+            if (is_string($url) && $url !== '') {
+                return self::pathUnderBase($this->baseUrl, $currentPath, $url);
             }
         }
 
         return null;
+    }
+
+    /**
+     * Resolves a Bundle link (absolute, root-relative, relative, or query-only: FHIR's
+     * Bundle.link.url is a uri) against the request it came from, and returns it as a path under
+     * the FHIR base -- or null when it leaves the base, so the token is never sent elsewhere.
+     */
+    public static function pathUnderBase(string $baseUrl, string $currentPath, string $url): ?string
+    {
+        $base = rtrim($baseUrl, '/');
+        $current = (string)strtok($base . '/' . $currentPath, '?');
+        if (preg_match('~^[a-z][a-z0-9+.-]*:~i', $url) === 1) {
+            $absolute = $url;
+        } elseif (str_starts_with($url, '//')) {
+            $absolute = (string)parse_url($base, PHP_URL_SCHEME) . ':' . $url;
+        } elseif (str_starts_with($url, '/')) {
+            $origin = preg_match('~^[a-z][a-z0-9+.-]*://[^/?#]+~i', $base, $m) === 1 ? $m[0] : '';
+            $absolute = $origin . $url;
+        } elseif (str_starts_with($url, '?')) {
+            $absolute = $current . $url;
+        } else {
+            $absolute = substr($current, 0, (int)strrpos($current, '/') + 1) . $url;
+        }
+        $prefix = $base . '/';
+        if (!str_starts_with($absolute, $prefix) || strlen($absolute) === strlen($prefix)) {
+            return null;
+        }
+        $path = substr($absolute, strlen($prefix));
+        // A dot segment could climb out of the base after the prefix check.
+        $segments = explode('/', (string)strtok($path, '?'));
+
+        return in_array('..', $segments, true) || in_array('.', $segments, true) ? null : $path;
     }
 
     /**

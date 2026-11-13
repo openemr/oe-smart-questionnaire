@@ -266,10 +266,11 @@ if ($path === '/fhir/QuestionnaireResponse' && $method === 'GET') {
             $entries[] = ['resource' => $response];
         }
     }
-    // Pages of two, whatever _count asks, so the app has to follow next links to see them all.
+    // Pages of two, whatever _count asks, so the app has to follow next links to see them all. The
+    // link is relative (Bundle.link.url is a uri), so the app has to resolve it against the request.
     $offset = max(0, (int)($_GET['_offset'] ?? 0));
     $links = $offset + 2 < count($entries)
-        ? [['relation' => 'next', 'url' => 'http://' . $_SERVER['HTTP_HOST'] . '/fhir/QuestionnaireResponse?' . http_build_query(['_offset' => $offset + 2] + $_GET)]]
+        ? [['relation' => 'next', 'url' => 'QuestionnaireResponse?' . http_build_query(['_offset' => $offset + 2] + $_GET)]]
         : [];
     $json(200, ['resourceType' => 'Bundle', 'type' => 'searchset', 'total' => count($entries), 'link' => $links, 'entry' => array_slice($entries, $offset, 2)]);
 }

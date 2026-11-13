@@ -260,6 +260,8 @@ $payload = [
     'patientMode' => $isPatient,
     // Whether this token may send what the form saves; without it the form opens read-only.
     'canSend' => $transport === 'observation' || $session->canCreate('QuestionnaireResponse'),
+    // Change and Withdraw on an earlier response update a QuestionnaireResponse, whatever new readings travel as.
+    'canChangeResponses' => $session->canUpdate('QuestionnaireResponse'),
     'transport' => $transport,
     'homeUrl' => $isPatient ? $homeUrl : null,
     'launchId' => $session->launchId,

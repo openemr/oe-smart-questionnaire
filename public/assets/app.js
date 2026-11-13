@@ -46,6 +46,8 @@
     // False when the token has no write scope for what this form saves (e.g. a public app where the
     // practice accepts information only from confidential apps): the form is then read-only.
     const canSend = data.canSend !== false;
+    // Change and Withdraw write a QuestionnaireResponse; without that scope earlier responses are view-only.
+    const canChange = data.canChangeResponses !== false;
     const HELD_TAG_SYSTEM = 'http://open-emr.org/fhir/CodeSystem/patient-write';
     // Responses the server stored but could not be read back: whether they are held is unknown,
     // so they keep Change and Withdraw (the server refuses either once staff have decided).
@@ -110,9 +112,9 @@
                     : 'In your record since ' + formatDate(current.authored) + '.');
             return;
         }
-        buttons.amend.hidden = !held || editable;
+        buttons.amend.hidden = !held || editable || !canChange;
         buttons.amend.textContent = 'Change';
-        buttons.withdraw.hidden = !held;
+        buttons.withdraw.hidden = !held || !canChange;
         buttons.complete.hidden = !editable;
         buttons.complete.disabled = busy || runtime === null;
         buttons.complete.textContent = current === null ? 'Send to my care team' : 'Send changes';
@@ -131,7 +133,9 @@
                 : 'In your record since ' + formatDate(current.authored) + '. To correct it, contact your care team.');
     };
 
+    /** Redraws the history and the controls for the current state (staff or patient mode). */
     const refreshControls = () => {
+        renderHistory();
         if (patientMode) {
             refreshPatientControls();
             return;
@@ -196,8 +200,13 @@
             open.textContent = patientMode
                 ? (held ? 'View or change' : 'View')
                 : (response.status === 'in-progress' ? 'Continue' : 'View');
-            open.disabled = current?.id === response.id;
+            // Opening another response mid-send, or before a partly failed send is retried, would
+            // drop the form and which readings were already saved.
+            open.disabled = current?.id === response.id || busy || sentKeys.length > 0;
             open.addEventListener('click', () => {
+                if (busy || sentKeys.length > 0) {
+                    return;
+                }
                 if (confirmDiscard()) {
                     // A patient opens what they sent to look at it; Change makes it editable.
                     load(response, !patientMode && response.status === 'in-progress');

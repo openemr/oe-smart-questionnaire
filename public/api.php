@@ -77,10 +77,6 @@ if ($action === 'vitals') {
     if (!$session->isPatient() || ($session->record['vitals_mode'] ?? false) !== true || !$session->canCreate('Observation')) {
         View::json(409, ['success' => false, 'message' => 'Readings can only be sent as vital signs when the server allows it.']);
     }
-    // Readings a failed earlier attempt already saved (by linkId); a retry sends only the rest.
-    $alreadySent = array_values(array_filter(is_array($submitted['alreadySent'] ?? null) ? $submitted['alreadySent'] : [], 'is_string'));
-    $sent = [];
-    $sentKeys = $alreadySent;
     try {
         $questionnaireId = $session->questionnaireId();
         $definition = $questionnaireId !== null ? $session->fhir->read('Questionnaire', $questionnaireId) : HomeVitals::bundled();
@@ -90,30 +86,25 @@ if ($action === 'vitals') {
     } catch (FhirException $exception) {
         $refused($exception);
     }
-    foreach ($observations as $key => $observation) {
-        if (in_array($key, $alreadySent, true)) {
-            continue;
+    // Readings a failed earlier attempt already saved (by linkId) are skipped: a retry sends only the rest.
+    $result = HomeVitals::sendRemaining($observations, $submitted['alreadySent'] ?? [], $session->fhir->save(...));
+    $sent = array_map(static fn(array $saved): array => ['id' => $saved['id'] ?? null, 'held' => LaunchSession::isHeld($saved)], $result['saved']);
+    $failure = $result['failure'];
+    if ($failure !== null) {
+        if ($result['sentKeys'] === []) {
+            $refused($failure);
         }
-        try {
-            $saved = $session->fhir->save($observation);
-        } catch (FhirException $exception) {
-            if ($sentKeys === []) {
-                $refused($exception);
-            }
-            // Some readings are stored: say which, so the browser does not send them twice.
-            $status = $exception->getHttpStatus();
-            View::json($status >= 400 && $status < 500 ? $status : 502, [
-                'success' => false,
-                'message' => 'Some readings were sent and some were not: ' . $exception->getMessage()
-                    . ' Send again to try only the readings that did not go.',
-                'observations' => $sent,
-                'sentKeys' => $sentKeys,
-            ]);
-        }
-        $sent[] = ['id' => $saved['id'] ?? null, 'held' => LaunchSession::isHeld($saved)];
-        $sentKeys[] = $key;
+        // Some readings are stored: say which, so the browser does not send them twice.
+        $status = $failure->getHttpStatus();
+        View::json($status >= 400 && $status < 500 ? $status : 502, [
+            'success' => false,
+            'message' => 'Some readings were sent and some were not: ' . $failure->getMessage()
+                . ' Send again to try only the readings that did not go.',
+            'observations' => $sent,
+            'sentKeys' => $result['sentKeys'],
+        ]);
     }
-    View::json(200, ['success' => true, 'observations' => $sent, 'sentKeys' => $sentKeys]);
+    View::json(200, ['success' => true, 'observations' => $sent, 'sentKeys' => $result['sentKeys']]);
 }
 
 if ($action === 'withdraw') {

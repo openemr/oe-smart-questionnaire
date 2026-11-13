@@ -156,6 +156,12 @@ final class LaunchSession
         return $this->grants($type, static fn(string $perms): bool => in_array($perms, ['write', '*'], true) || str_contains($perms, 'c'));
     }
 
+    /** Whether the token can update the type (change or withdraw): v1 (.write, .*) or v2 with u. */
+    public function canUpdate(string $type): bool
+    {
+        return $this->grants($type, static fn(string $perms): bool => in_array($perms, ['write', '*'], true) || str_contains($perms, 'u'));
+    }
+
     /** Whether the token can read the type: v1 (.read, .*) or v2 with r or s. */
     public function canRead(string $type): bool
     {

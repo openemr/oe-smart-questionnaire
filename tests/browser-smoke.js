@@ -221,6 +221,28 @@ const check = (name, ok, detail = '') => {
     await tick(); await tick();
     check('patient vitals: the retry leaves out readings already saved', JSON.stringify(partial.sent[1]?.body.alreadySent) === '["bp"]', JSON.stringify(partial.sent[1]?.body));
 
+    const heldEarlier = {
+        resourceType: 'QuestionnaireResponse', id: 'held-0', status: 'completed', authored: '2026-11-01T10:00:00Z',
+        questionnaire: 'Questionnaire/q1', item: [{ linkId: 'housing', answer: [{ valueBoolean: true }] }],
+        meta: { tag: [{ system: 'http://open-emr.org/fhir/CodeSystem/patient-write', code: 'held-for-review' }] },
+    };
+    const readOnlyQr = patientPage({ transport: 'observation', canChangeResponses: false, responses: [heldEarlier] });
+    readOnlyQr.$('sq-history').querySelector('button').click();
+    check('patient vitals: without a QuestionnaireResponse write scope an earlier response is view-only', readOnlyQr.$('sq-status').textContent === 'Waiting for review'
+        && readOnlyQr.$('sq-amend').hidden === true && readOnlyQr.$('sq-withdraw').hidden === true);
+
+    const pending = patientPage({ transport: 'observation', responses: [heldEarlier] }, { failVitalsOnce: true });
+    pending.window.OpenEMRQuestionnaire.runtime.setAnswers('housing', [{ valueKey: 'valueBoolean', value: true }]);
+    pending.$('sq-complete').click();
+    await tick(); await tick();
+    const pendingOpen = pending.$('sq-history').querySelector('button');
+    pendingOpen.click();
+    check('patient vitals: history is closed while a partly failed send awaits its retry', pendingOpen.disabled === true
+        && pending.$('sq-status').hidden === true);
+    pending.$('sq-complete').click();
+    await tick(); await tick();
+    check('patient vitals: the retry after that still skips saved readings', JSON.stringify(pending.sent[1]?.body.alreadySent) === '["bp"]');
+
     const unsure = patientPage({}, { unconfirmed: true });
     unsure.window.OpenEMRQuestionnaire.runtime.setAnswers('housing', [{ valueKey: 'valueBoolean', value: true }]);
     unsure.$('sq-complete').click();
