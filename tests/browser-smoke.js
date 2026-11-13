@@ -231,6 +231,16 @@ const check = (name, ok, detail = '') => {
     check('patient vitals: without a QuestionnaireResponse write scope an earlier response is view-only', readOnlyQr.$('sq-status').textContent === 'Waiting for review'
         && readOnlyQr.$('sq-amend').hidden === true && readOnlyQr.$('sq-withdraw').hidden === true);
 
+    const updateOnly = patientPage({ canSend: false, canChangeResponses: true, responses: [heldEarlier] });
+    updateOnly.$('sq-history').querySelector('button').click();
+    check('patient: update-only access can still change and withdraw a held response, not start a new one', updateOnly.$('sq-amend').hidden === false
+        && updateOnly.$('sq-withdraw').hidden === false && updateOnly.$('sq-new').hidden === true);
+    updateOnly.$('sq-amend').click();
+    updateOnly.$('sq-complete').click();
+    await tick(); await tick();
+    check('patient: update-only access sends the change as an update of the held response', updateOnly.sent[0]?.url.includes('action=save')
+        && updateOnly.sent[0].body.id === 'held-0', JSON.stringify(updateOnly.sent[0]?.body));
+
     const pending = patientPage({ transport: 'observation', responses: [heldEarlier] }, { failVitalsOnce: true });
     pending.window.OpenEMRQuestionnaire.runtime.setAnswers('housing', [{ valueKey: 'valueBoolean', value: true }]);
     pending.$('sq-complete').click();

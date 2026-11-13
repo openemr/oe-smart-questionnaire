@@ -307,6 +307,16 @@ $retry = HomeVitals::sendRemaining($numeric, json_decode((string)json_encode($fi
     return ['id' => 'x'] + $observation;
 });
 check('vitals send: the retry skips the numeric linkId already saved', $saves === ['b'] && $retry['sentKeys'] === ['123', 'heart-rate'] && $retry['failure'] === null);
+$transportCalls = 0;
+/** Saves the first reading, then loses the connection (no HTTP response). */
+$transport = HomeVitals::sendRemaining($numeric, [], static function (array $observation) use (&$transportCalls): array {
+    if (++$transportCalls === 2) {
+        throw new FhirException('POST Observation failed: no response from the server.', 0, new RuntimeException('curl: timeout'));
+    }
+    return ['id' => 'o1'] + $observation;
+});
+check('vitals send: a transport failure mid-batch still reports what was saved', $transport['sentKeys'] === ['123']
+    && $transport['failure']?->getHttpStatus() === 0 && $transport['failure']->getPrevious() instanceof RuntimeException);
 check('vitals send: an int in alreadySent still matches', HomeVitals::sendRemaining($numeric, [123, 'heart-rate'], static fn(array $o): array => $o)['saved'] === []);
 
 // Bundle next links, absolute or relative, stay under the FHIR base.

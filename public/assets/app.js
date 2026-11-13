@@ -102,7 +102,9 @@
         statusBadge.className = 'badge ml-2 ' + (unsure ? 'badge-secondary' : (held ? 'badge-info' : 'badge-success'));
 
         buttons.draft.hidden = true;
-        if (!canSend) {
+        // Without create access the form is read-only, except that a held response can still be
+        // changed or withdrawn when the token may update QuestionnaireResponse.
+        if (!canSend && !(held && canChange)) {
             editable = false;
             Object.values(buttons).forEach((button) => { button.hidden = true; });
             fieldset.disabled = true;
@@ -112,6 +114,7 @@
                     : 'In your record since ' + formatDate(current.authored) + '.');
             return;
         }
+        buttons.new.hidden = !canSend;
         buttons.amend.hidden = !held || editable || !canChange;
         buttons.amend.textContent = 'Change';
         buttons.withdraw.hidden = !held || !canChange;

@@ -16,12 +16,14 @@ declare(strict_types=1);
 namespace OpenEMR\SmartQuestionnaire;
 
 use RuntimeException;
+use Throwable;
 
 final class FhirException extends RuntimeException
 {
-    public function __construct(string $message, private readonly int $httpStatus = 0)
+    /** @param int $httpStatus the server's HTTP status, or 0 when no response arrived (transport failure) */
+    public function __construct(string $message, private readonly int $httpStatus = 0, ?Throwable $previous = null)
     {
-        parent::__construct($message);
+        parent::__construct($message, 0, $previous);
     }
 
     public function getHttpStatus(): int

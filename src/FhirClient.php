@@ -190,7 +190,13 @@ final class FhirClient
             $headers['Content-Type'] = 'application/fhir+json';
             $payload = json_encode($body, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
         }
-        $response = $this->http->request($method, $this->baseUrl . '/' . $path, $headers, $payload);
+        try {
+            $response = $this->http->request($method, $this->baseUrl . '/' . $path, $headers, $payload);
+        } catch (\RuntimeException $exception) {
+            // No response (connection refused, timeout): fail the way an HTTP error does, so callers
+            // such as a partial vitals send can still report what was saved before it.
+            throw new FhirException("{$method} {$path} failed: no response from the server.", 0, $exception);
+        }
         $location = $response['headers']['location'] ?? $response['headers']['content-location'] ?? null;
         $decoded = $response['body'] !== '' ? json_decode($response['body'], true) : [];
 
