@@ -123,7 +123,12 @@ const check = (name, ok, detail = '') => {
     check('Amend enables editing as amendment', r$('sq-fieldset').disabled === false && r$('sq-complete').textContent === 'Save amendment');
 
     // Patient sign-in: what the patient sends is held for review; it can be changed or withdrawn.
-    const patientPage = (patch) => {
+    /**
+     * The workspace in patient mode with `patch` over its page data, and a stubbed api.php:
+     * `options.failVitalsOnce` fails the first vitals send part-way, `options.unconfirmed` answers
+     * a save without the read-back.
+     */
+    const patientPage = (patch, options = {}) => {
         const pageHtml = source.replace(
             /(<script type="application\/json" id="sq-data">)([\s\S]*?)(<\/script>)/,
             (match, open, json, close) => {
@@ -137,6 +142,7 @@ const check = (name, ok, detail = '') => {
         const sent = [];
         pageDom.window.structuredClone = window.structuredClone;
         pageDom.window.confirm = () => true;
+        /** Stands in for api.php: records each request and answers like the server would. */
         pageDom.window.fetch = async (url, init) => {
             const body = JSON.parse(init.body);
             sent.push({ url, body });
@@ -144,13 +150,20 @@ const check = (name, ok, detail = '') => {
                 return { ok: true, status: 200, json: async () => ({ success: true, withdrawn: body.id }) };
             }
             if (url.includes('action=vitals')) {
-                return { ok: true, status: 200, json: async () => ({ success: true, observations: [{ id: 'o1', held: true }, { id: 'o2', held: true }] }) };
+                if (options.failVitalsOnce && sent.length === 1) {
+                    return { ok: false, status: 502, json: async () => ({ success: false, message: 'Some readings were sent and some were not.', observations: [{ id: 'o1', held: true }], sentKeys: ['bp'] }) };
+                }
+                return { ok: true, status: 200, json: async () => ({ success: true, observations: [{ id: 'o1', held: true }, { id: 'o2', held: true }], sentKeys: ['bp', 'heart-rate'] }) };
+            }
+            if (options.unconfirmed) {
+                const { meta, ...plain } = body;
+                return { ok: true, status: 200, json: async () => ({ success: true, resource: { ...plain, id: body.id || 'u-1' }, held: null, confirmed: false }) };
             }
             const resource = {
                 ...body, id: body.id || 'held-1', authored: '2026-11-10T12:00:00Z',
                 meta: { tag: [{ system: 'http://open-emr.org/fhir/CodeSystem/patient-write', code: 'held-for-review' }] },
             };
-            return { ok: true, status: 200, json: async () => ({ success: true, resource, held: true }) };
+            return { ok: true, status: 200, json: async () => ({ success: true, resource, held: true, confirmed: true }) };
         };
         pageDom.window.eval(fs.readFileSync(path.join(publicDir, 'assets/runtime/openemr_questionnaire.js'), 'utf8'));
         pageDom.window.eval(fs.readFileSync(path.join(publicDir, 'assets/app.js'), 'utf8'));
@@ -196,6 +209,22 @@ const check = (name, ok, detail = '') => {
     await tick(); await tick();
     check('patient vitals: Observation transport posts to vitals', obs.sent[0]?.url.includes('action=vitals'));
     check('patient vitals: says how many readings went', /Sent 2 readings/.test(obs.$('sq-alert').textContent) && obs.$('sq-fieldset').disabled === false);
+
+    const partial = patientPage({ transport: 'observation' }, { failVitalsOnce: true });
+    partial.window.OpenEMRQuestionnaire.runtime.setAnswers('housing', [{ valueKey: 'valueBoolean', value: true }]);
+    partial.$('sq-complete').click();
+    await tick(); await tick();
+    check('patient vitals: a partial failure is reported', /some were not/.test(partial.$('sq-alert').textContent));
+    partial.$('sq-complete').click();
+    await tick(); await tick();
+    check('patient vitals: the retry leaves out readings already saved', JSON.stringify(partial.sent[1]?.body.alreadySent) === '["bp"]', JSON.stringify(partial.sent[1]?.body));
+
+    const unsure = patientPage({}, { unconfirmed: true });
+    unsure.window.OpenEMRQuestionnaire.runtime.setAnswers('housing', [{ valueKey: 'valueBoolean', value: true }]);
+    unsure.$('sq-complete').click();
+    await tick(); await tick();
+    check('patient: an unconfirmed send keeps Change and Withdraw', unsure.$('sq-amend').hidden === false && unsure.$('sq-withdraw').hidden === false
+        && !/in your record/.test(unsure.$('sq-alert').textContent), unsure.$('sq-alert').textContent);
 
     console.log((failures === 0 ? 'OK' : 'FAILED') + ` (${count} checks, ${failures} failures)`);
     process.exit(failures === 0 ? 0 : 1);

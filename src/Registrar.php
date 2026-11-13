@@ -271,6 +271,11 @@ final class Registrar
             self::registrationEndpoint($configuration, $registrationEndpoint),
             $this->publicPayload($clientName, self::contact(), $patientScope)
         );
+        // A secret means the server made a confidential client; keep the previous public one.
+        if (is_string($decoded['client_secret'] ?? null) && $decoded['client_secret'] !== '') {
+            throw new RuntimeException('Not registered: the server issued a client secret, so it created a confidential client ('
+                . (is_string($decoded['client_id']) ? $decoded['client_id'] : '?') . '), not a public one. Disable that client in the EHR.');
+        }
         $previous = Config::publicClientFor($issuer);
         $record = array_filter([
             'client_id' => $decoded['client_id'],
@@ -283,10 +288,7 @@ final class Registrar
             'patient_scopes' => $patientScope,
         ], static fn($value) => $value !== null && $value !== '');
         Config::savePublicClient($issuer, $record);
-        $record['note'] = self::publicNote($patientScope)
-            . (is_string($decoded['client_secret'] ?? null) && $decoded['client_secret'] !== ''
-                ? ' Warning: the server issued a secret, so it registered a confidential client; this app does not use it.'
-                : '');
+        $record['note'] = self::publicNote($patientScope);
 
         return $record;
     }
@@ -554,6 +556,7 @@ final class Registrar
     {
         $lines = [];
         $ok = true;
+        $offered = '';
         try {
             $configuration = (new SmartClient($this->http))->discover($issuer);
             $lines[] = 'SMART discovery OK — authorize: ' . $configuration['authorization_endpoint'];
@@ -607,6 +610,9 @@ final class Registrar
         }
         if (!is_string($client['registration_client_uri'] ?? null) || !is_string($client['registration_access_token'] ?? null)) {
             $lines[] = 'Client ' . $client['client_id'] . ' was recorded manually; its registration cannot be read back.';
+            // The public and portal clients are registrations of their own; check them anyway.
+            array_push($lines, ...$this->verifyPublic($issuer, $offered, $ok));
+            array_push($lines, ...$this->verifyPortal($issuer, $offered, $ok));
             return ['ok' => $ok, 'lines' => $lines];
         }
         $read = $this->readRegistration($client);
@@ -637,26 +643,48 @@ final class Registrar
             $lines[] = 'The server has redirect URI ' . implode(', ', $redirects) . ' but this app now uses '
                 . Config::redirectUri() . ' (app_url changed?). Re-register.';
         }
-        array_push($lines, ...$this->verifyPublic($issuer, $ok));
-        array_push($lines, ...$this->verifyPortal($issuer, $ok));
+        array_push($lines, ...$this->verifyPublic($issuer, $offered, $ok));
+        array_push($lines, ...$this->verifyPortal($issuer, $offered, $ok));
         $lines[] = 'Whether they are enabled is only visible in the EHR (OpenEMR: Admin > System > API Clients).';
 
         return ['ok' => $ok, 'lines' => $lines];
     }
 
     /**
-     * Lines about the patient portal client; clears $ok on a problem.
+     * A line when a patient client's saved scopes differ from what the server offers now, so the
+     * admin knows which client to register again; none when they match or nothing is offered.
      *
      * @return list<string>
      */
-    private function verifyPortal(string $issuer, bool &$ok): array
+    public static function patientScopeDrift(string $label, string $saved, string $expected): array
+    {
+        if ($expected === '' || $saved === $expected) {
+            return [];
+        }
+
+        return [$label . ' has ' . ($saved !== '' ? $saved : 'no patient scopes') . ' but the server now offers ' . $expected
+            . '. Register the ' . lcfirst($label) . ' again to pick up the change (e.g. Patient App FHIR Writes turned on or off).'];
+    }
+
+    /**
+     * Lines about the patient portal client; clears $ok on a problem.
+     *
+     * @param string $offered patient sign-in scopes the server offers now ('' when unknown)
+     * @return list<string>
+     */
+    private function verifyPortal(string $issuer, string $offered, bool &$ok): array
     {
         $portal = Config::portalClientFor($issuer);
         if ($portal === null) {
             return ['Patient portal client: not registered (optional; register it to launch the app from the patient portal).'];
         }
+        $drift = self::patientScopeDrift(
+            'Patient portal client',
+            is_string($portal['patient_scopes'] ?? null) ? $portal['patient_scopes'] : '',
+            $offered !== '' ? self::portalScopes($offered) : ''
+        );
         if (!is_string($portal['registration_client_uri'] ?? null) || !is_string($portal['registration_access_token'] ?? null)) {
-            return ['Patient portal client ' . $portal['client_id'] . ': its registration cannot be read back.'];
+            return ['Patient portal client ' . $portal['client_id'] . ': its registration cannot be read back.', ...$drift];
         }
         $read = $this->readRegistration($portal);
         if ($read['error'] !== null) {
@@ -664,7 +692,7 @@ final class Registrar
             return ['Patient portal client: ' . $read['error']];
         }
         $server = $read['registration'];
-        $lines = ['Patient portal client confirmed: ' . $portal['client_id'] . ' — ' . (string)($portal['patient_scopes'] ?? '')];
+        $lines = ['Patient portal client confirmed: ' . $portal['client_id'] . ' — ' . (string)($portal['patient_scopes'] ?? ''), ...$drift];
         $serverSecret = $server['client_secret'] ?? null;
         $savedSecret = $portal['client_secret'] ?? null;
         if (is_string($serverSecret) && $serverSecret !== '' && (!is_string($savedSecret) || !hash_equals($serverSecret, $savedSecret))) {
@@ -684,16 +712,22 @@ final class Registrar
     /**
      * Lines about the public patient client; clears $ok on a problem.
      *
+     * @param string $offered patient sign-in scopes the server offers now ('' when unknown)
      * @return list<string>
      */
-    private function verifyPublic(string $issuer, bool &$ok): array
+    private function verifyPublic(string $issuer, string $offered, bool &$ok): array
     {
         $public = Config::publicClientFor($issuer);
         if ($public === null) {
             return ['Public patient client: not registered (optional; register it to try patient sign-in as a public app).'];
         }
+        $drift = self::patientScopeDrift(
+            'Public patient client',
+            is_string($public['patient_scopes'] ?? null) ? $public['patient_scopes'] : '',
+            $offered
+        );
         if (!is_string($public['registration_client_uri'] ?? null) || !is_string($public['registration_access_token'] ?? null)) {
-            return ['Public patient client ' . $public['client_id'] . ': its registration cannot be read back.'];
+            return ['Public patient client ' . $public['client_id'] . ': its registration cannot be read back.', ...$drift];
         }
         $read = $this->readRegistration($public);
         if ($read['error'] !== null) {
@@ -707,7 +741,7 @@ final class Registrar
                 . 'as confidential. Register the public client again.'];
         }
         $lines = ['Public patient client confirmed: ' . $public['client_id'] . ' (no secret; PKCE only) — '
-            . (string)($public['patient_scopes'] ?? '')];
+            . (string)($public['patient_scopes'] ?? ''), ...$drift];
         $redirects = is_array($server['redirect_uris'] ?? null) ? $server['redirect_uris'] : [];
         if ($redirects !== [] && !in_array(Config::redirectUri(), $redirects, true)) {
             $ok = false;

@@ -54,7 +54,38 @@ final class FhirClient
      */
     public function search(string $type, array $params): array
     {
-        $bundle = $this->send('GET', $type . ($params === [] ? '' : '?' . http_build_query($params)));
+        return self::entries($this->send('GET', $type . ($params === [] ? '' : '?' . http_build_query($params))), $type);
+    }
+
+    /**
+     * Every page of a search: follows the Bundle's next links, which carry the original search
+     * parameters, up to $maxPages. A next link that leaves this server's FHIR base is not followed,
+     * so the access token is never sent elsewhere.
+     *
+     * @param array<string, string> $params
+     * @return list<array<string, mixed>>
+     */
+    public function searchAll(string $type, array $params, int $maxPages = 20): array
+    {
+        $path = $type . ($params === [] ? '' : '?' . http_build_query($params));
+        $resources = [];
+        for ($page = 0; $page < $maxPages && $path !== null; $page++) {
+            $bundle = $this->send('GET', $path);
+            array_push($resources, ...self::entries($bundle, $type));
+            $path = $this->nextPath($bundle);
+        }
+
+        return $resources;
+    }
+
+    /**
+     * The resources of the type in a search Bundle.
+     *
+     * @param array<string, mixed> $bundle
+     * @return list<array<string, mixed>>
+     */
+    private static function entries(array $bundle, string $type): array
+    {
         $resources = [];
         foreach (is_array($bundle['entry'] ?? null) ? $bundle['entry'] : [] as $entry) {
             $resource = is_array($entry) ? ($entry['resource'] ?? null) : null;
@@ -64,6 +95,25 @@ final class FhirClient
         }
 
         return $resources;
+    }
+
+    /**
+     * The Bundle's next link as a path under this server's FHIR base, or null when there is none
+     * or it points somewhere else.
+     *
+     * @param array<string, mixed> $bundle
+     */
+    private function nextPath(array $bundle): ?string
+    {
+        $prefix = rtrim($this->baseUrl, '/') . '/';
+        foreach (is_array($bundle['link'] ?? null) ? $bundle['link'] : [] as $link) {
+            $url = is_array($link) && ($link['relation'] ?? null) === 'next' ? ($link['url'] ?? null) : null;
+            if (is_string($url) && str_starts_with($url, $prefix) && strlen($url) > strlen($prefix)) {
+                return substr($url, strlen($prefix));
+            }
+        }
+
+        return null;
     }
 
     /**

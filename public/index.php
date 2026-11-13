@@ -158,6 +158,7 @@ if ($questionnaireId === null && !$vitalsMode) {
 }
 
 // --- Load the questionnaire and this patient's responses to it ------------------------------
+$questionnaire = null;
 if (!$vitalsMode) {
     try {
         $questionnaire = $fhir->read('Questionnaire', (string)$questionnaireId);
@@ -180,7 +181,7 @@ $transport = 'questionnaire';
 if ($vitalsMode) {
     $homeVitals = null;
     try {
-        $homeVitals = isset($questionnaire) ? $questionnaire : HomeVitals::find($fhir);
+        $homeVitals = $questionnaire ?? HomeVitals::find($fhir);
     } catch (FhirException $exception) {
         $notices[] = 'The Home vital signs questionnaire could not be looked up: ' . $exception->getMessage();
     }
@@ -333,7 +334,8 @@ $renderNotices($notices);
     </div>
 <?php endif; ?>
 
-<?php if (!($vitalsMode && $transport === 'observation')) : ?>
+<?php // Earlier held responses stay reachable (to change or withdraw) even when new readings go as Observations. ?>
+<?php if (!($vitalsMode && $transport === 'observation' && $responses === [])) : ?>
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
         <strong><?= $isPatient ? 'What you sent' : 'Responses for this patient' ?></strong>

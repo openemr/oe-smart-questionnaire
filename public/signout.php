@@ -20,15 +20,21 @@ require dirname(__DIR__) . '/src/bootstrap.php';
 
 use OpenEMR\SmartQuestionnaire\LaunchStore;
 use OpenEMR\SmartQuestionnaire\Session;
+use OpenEMR\SmartQuestionnaire\View;
 
 Session::start();
 
 $launchId = $_POST['lid'] ?? null;
 $record = LaunchStore::get($launchId);
-if (
-    ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && is_string($launchId) && $record !== null
-    && is_string($_POST['csrf'] ?? null) && hash_equals((string)($record['csrf'] ?? ''), $_POST['csrf'])
-) {
+// A launch that is already gone (expired, or signed out in another tab) is signed out.
+if ($record !== null) {
+    if (
+        ($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST' || !is_string($launchId)
+        || !is_string($_POST['csrf'] ?? null) || !hash_equals((string)($record['csrf'] ?? ''), $_POST['csrf'])
+    ) {
+        View::error(403, 'Sign-out refused', 'The sign-out request could not be verified, so you are still signed in. '
+            . 'Go back and use the Sign out button on the page.');
+    }
     LaunchStore::forget($launchId);
     session_regenerate_id(true);
 }

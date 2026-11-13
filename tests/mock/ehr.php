@@ -266,7 +266,12 @@ if ($path === '/fhir/QuestionnaireResponse' && $method === 'GET') {
             $entries[] = ['resource' => $response];
         }
     }
-    $json(200, ['resourceType' => 'Bundle', 'type' => 'searchset', 'entry' => $entries]);
+    // Pages of two, whatever _count asks, so the app has to follow next links to see them all.
+    $offset = max(0, (int)($_GET['_offset'] ?? 0));
+    $links = $offset + 2 < count($entries)
+        ? [['relation' => 'next', 'url' => 'http://' . $_SERVER['HTTP_HOST'] . '/fhir/QuestionnaireResponse?' . http_build_query(['_offset' => $offset + 2] + $_GET)]]
+        : [];
+    $json(200, ['resourceType' => 'Bundle', 'type' => 'searchset', 'total' => count($entries), 'link' => $links, 'entry' => array_slice($entries, $offset, 2)]);
 }
 $validate = static function (array $body) use ($json, $outcome): void {
     if (($body['resourceType'] ?? '') !== 'QuestionnaireResponse' || ($body['questionnaire'] ?? '') === '' || !isset($body['subject']['reference'])) {

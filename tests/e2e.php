@@ -250,6 +250,17 @@ $r = http('GET', "{$app}/launch.php?" . http_build_query(['iss' => $iss, 'launch
 $data2 = pageData($r['body']);
 check('continue launch opens that response', ($data2['initialResponseId'] ?? null) === $id);
 check('history lists only this patient', count($data2['responses'] ?? []) === 1);
+// The mock pages its search by two: the history needs every page.
+$state = mockState($work);
+$before = $state;
+foreach (['page-a', 'page-b', 'page-c'] as $n => $extra) {
+    $state['responses'][$extra] = ['resourceType' => 'QuestionnaireResponse', 'id' => $extra, 'status' => 'completed',
+        'authored' => '2026-01-0' . ($n + 1) . 'T10:00:00Z', 'questionnaire' => 'Questionnaire/q1', 'subject' => ['reference' => 'Patient/p1']];
+}
+file_put_contents("{$work}/mock/state.json", json_encode($state));
+$paged = pageData(http('GET', "{$app}/index.php?lid={$lid}", $jar)['body']);
+check('history follows every page of the search (next links)', count($paged['responses'] ?? []) === 4, (string)count($paged['responses'] ?? []));
+file_put_contents("{$work}/mock/state.json", json_encode($before));
 check('first launch still usable (per-launch state)', pageData(http('GET', "{$app}/index.php?lid={$lid}", $jar)['body']) !== null);
 
 // --- standalone launch without a questionnaire shows the picker --------------------------------

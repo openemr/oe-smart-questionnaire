@@ -66,6 +66,12 @@ final class LaunchSession
     public const HELD_TAG_SYSTEM = 'http://open-emr.org/fhir/CodeSystem/patient-write';
     public const HELD_TAG_CODE = 'held-for-review';
 
+    /** What a patient sends, by the resource type it travels as. */
+    private const WRITE_WORDS = [
+        'QuestionnaireResponse' => 'questionnaire answers',
+        'Observation' => 'readings as vital signs',
+    ];
+
     /** @return array<string, mixed> */
     public function token(): array
     {
@@ -110,7 +116,16 @@ final class LaunchSession
         $writes = ScopeCheck::writes($missing);
         $others = array_values(array_diff($missing, $writes));
         $parts = [];
-        if ($writes !== []) {
+        // Some sending still allowed: name what is not, without guessing at the practice's setting.
+        $stillSends = array_values(array_filter(['QuestionnaireResponse', 'Observation'], fn(string $type): bool => $this->canCreate($type)));
+        if ($writes !== [] && $stillSends !== []) {
+            $notSent = array_values(array_unique(array_map(
+                static fn(string $scope): string => self::WRITE_WORDS[substr(strrchr(ScopeCheck::parse($scope)['key'] ?? '', '/') ?: '/', 1)] ?? $scope,
+                $writes
+            )));
+            $parts[] = 'You can send ' . implode(' and ', array_map(static fn(string $type): string => self::WRITE_WORDS[$type], $stillSends))
+                . ', but this sign-in cannot send ' . implode(' or ', $notSent) . '.';
+        } elseif ($writes !== []) {
             $parts[] = $this->isPublicClient()
                 ? 'You can look, but not send: this practice accepts information only from confidential apps, and you '
                     . 'signed in with the public app. Use the confidential patient sign-in to send.'
@@ -233,22 +248,23 @@ final class LaunchSession
     }
 
     /**
-     * All of the patient's responses, newest first. For a patient app this includes its own writes
-     * still held for review: OpenEMR adds those only to a search by _id, patient, subject and
-     * _count, so this never asks the server to sort, and sorts here instead.
+     * All of the patient's responses, newest first, from every page of the search. For a patient
+     * app this includes its own writes still held for review: OpenEMR adds those only to a search
+     * by _id, patient, subject and _count, so this never asks the server to sort, and sorts here
+     * instead.
      *
      * @return list<array<string, mixed>>
      */
     public function allResponses(): array
     {
         try {
-            $responses = $this->fhir->search('QuestionnaireResponse', [
+            $responses = $this->fhir->searchAll('QuestionnaireResponse', [
                 'patient' => $this->patientId,
                 '_count' => '100',
             ]);
         } catch (FhirException) {
             // Servers that only support subject= for this resource.
-            $responses = $this->fhir->search('QuestionnaireResponse', [
+            $responses = $this->fhir->searchAll('QuestionnaireResponse', [
                 'subject' => 'Patient/' . $this->patientId,
                 '_count' => '100',
             ]);

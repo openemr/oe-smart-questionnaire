@@ -47,8 +47,13 @@
     // practice accepts information only from confidential apps): the form is then read-only.
     const canSend = data.canSend !== false;
     const HELD_TAG_SYSTEM = 'http://open-emr.org/fhir/CodeSystem/patient-write';
-    const isHeld = (resource) => Array.isArray(resource?.meta?.tag)
-        && resource.meta.tag.some((tag) => tag.system === HELD_TAG_SYSTEM && tag.code === 'held-for-review');
+    // Responses the server stored but could not be read back: whether they are held is unknown,
+    // so they keep Change and Withdraw (the server refuses either once staff have decided).
+    const unconfirmed = new Set();
+    /** Whether a response is a patient write still held for staff review (or unconfirmed). */
+    const isHeld = (resource) => (Array.isArray(resource?.meta?.tag)
+        && resource.meta.tag.some((tag) => tag.system === HELD_TAG_SYSTEM && tag.code === 'held-for-review'))
+        || (resource?.id !== undefined && unconfirmed.has(resource.id));
 
     const STATUS_CLASSES = {
         'in-progress': 'badge-warning',
@@ -64,6 +69,7 @@
     let editable = false;
     let dirty = false;
     let busy = false;
+    let sentKeys = []; // readings a partly failed vitals send already stored, by linkId
 
     const showAlert = (message, type) => {
         alertBox.className = 'alert alert-' + type;
@@ -197,11 +203,13 @@
 
     const confirmDiscard = () => !dirty || window.confirm('Discard unsaved changes?');
 
+    /** Mounts the form on a stored response (or a blank one) and resets the per-response state. */
     const load = (response, allowEdit) => {
         clearAlert();
         form.replaceChildren();
         current = response ? structuredClone(response) : null;
         editable = allowEdit;
+        sentKeys = [];
         runtime = window.OpenEMRQuestionnaire.mount({
             questionnaire: data.questionnaire,
             questionnaireResponse: current,
@@ -218,6 +226,7 @@
         renderHistory();
     };
 
+    /** Sends the form: new home readings as Observations when allowed, anything else as a QuestionnaireResponse. */
     const save = async (status) => {
         if (!runtime || !editable || busy) {
             return;
@@ -240,18 +249,29 @@
             delete body.id;
         }
 
+        // New readings go as Observations when allowed; a response sent earlier is still revised as one.
+        const asObservations = sendsObservations && !current?.id;
+        if (asObservations) {
+            body.alreadySent = sentKeys;
+        }
+
         busy = true;
         refreshControls();
         try {
-            const result = await post(sendsObservations ? 'vitals' : 'save', body);
-            if (sendsObservations) {
-                const count = (result.observations || []).length;
+            const result = await post(asObservations ? 'vitals' : 'save', body);
+            if (asObservations) {
+                const count = (result.sentKeys || []).length;
                 setDirty(false);
                 load(null, true);
                 showAlert('Sent ' + count + ' reading' + (count === 1 ? '' : 's') + '. Your care team reviews them before they go in your record.', 'success');
                 return;
             }
             const saved = result.resource;
+            if (result.confirmed === false) {
+                unconfirmed.add(saved.id);
+            } else {
+                unconfirmed.delete(saved.id);
+            }
             responses = [saved, ...responses.filter((item) => item.id !== saved.id)];
             current = saved;
             // Keep editing drafts; a completed or amended response goes back to read-only.
@@ -259,7 +279,9 @@
             setDirty(false);
             showAlert(
                 patientMode
-                    ? (isHeld(saved)
+                    ? (result.confirmed === false
+                        ? 'Sent, but the server did not confirm what it did with it. Until your care team reviews it, you can still change or withdraw it.'
+                        : isHeld(saved)
                         ? 'Sent. Your care team reviews it before it goes in your record; until then you can change or withdraw it.'
                         : 'Sent, and it is in your record.')
                     : (saved.status === 'in-progress'
@@ -272,6 +294,9 @@
                 notifyEhr(saved);
             }
         } catch (error) {
+            if (asObservations && Array.isArray(error?.result?.sentKeys)) {
+                sentKeys = error.result.sentKeys;
+            }
             showAlert(error instanceof Error ? error.message : 'Save failed.', 'danger');
         } finally {
             busy = false;
@@ -279,6 +304,7 @@
         }
     };
 
+    /** POSTs to api.php; on failure throws an Error carrying the server's JSON as `result`. */
     const post = async (action, body) => {
         const response = await fetch('api.php?' + new URLSearchParams({ lid: data.launchId, action }), {
             method: 'POST',
@@ -288,23 +314,32 @@
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || result.success !== true) {
-            throw new Error(result.message || 'Save failed (HTTP ' + response.status + ').');
+            const error = new Error(result.message || 'Save failed (HTTP ' + response.status + ').');
+            error.result = result;
+            throw error;
         }
         return result;
     };
 
+    /** Withdraws the open held response (entered-in-error) and drops it from the history. */
     const withdraw = async () => {
         if (!current?.id || busy || !window.confirm('Withdraw this? Your care team will not review it.')) {
             return;
         }
+        // The history stays clickable while this runs, so another response may be open by the end.
+        const withdrawnId = current.id;
         busy = true;
         refreshControls();
         try {
-            await post('withdraw', { id: current.id });
-            const withdrawnId = current.id;
+            await post('withdraw', { id: withdrawnId });
             responses = responses.filter((item) => item.id !== withdrawnId);
-            setDirty(false);
-            load(null, true);
+            unconfirmed.delete(withdrawnId);
+            if (current?.id === withdrawnId) {
+                setDirty(false);
+                load(null, true);
+            } else {
+                renderHistory();
+            }
             showAlert('Withdrawn. Your care team will not see it.', 'success');
         } catch (error) {
             showAlert(error instanceof Error ? error.message : 'Withdraw failed.', 'danger');

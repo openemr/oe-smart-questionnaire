@@ -101,10 +101,14 @@ final class HomeVitals
      * Vital-sign Observations for the readings in a response: one per answered coded item, and one
      * blood pressure panel with systolic and diastolic as components. They are sent as
      * preliminary: a patient's reading, which OpenEMR also forces on a patient app's vital sign.
+     * Keyed by the linkId they come from (the panel by its group's), so a retry after a partial
+     * send can leave out the readings already saved. A value outside its item's minValue/maxValue
+     * is refused.
      *
      * @param array<string, mixed> $questionnaire
      * @param array<string, mixed> $response
-     * @return list<array<string, mixed>>
+     * @return array<string, array<string, mixed>>
+     * @throws InvalidArgumentException when nothing is entered or a value is out of range
      */
     public static function toObservations(array $questionnaire, array $response, string $patientId): array
     {
@@ -128,6 +132,7 @@ final class HomeVitals
         $observations = [];
         $components = [];
         $panel = null;
+        $panelKey = null;
         foreach ($definitions as $linkId => $definition) {
             $quantity = isset($answers[$linkId]) ? self::quantity($answers[$linkId], $definition['item']) : null;
             $code = self::code($definition['item']);
@@ -137,20 +142,21 @@ final class HomeVitals
             $parentCode = $definition['parent'] !== null ? self::code($definition['parent']) : null;
             if ($parentCode !== null && self::isLoinc($parentCode, '85354-9')) {
                 $panel ??= $parentCode;
+                $panelKey ??= is_string($definition['parent']['linkId'] ?? null) ? $definition['parent']['linkId'] : 'bp';
                 $components[] = ['code' => $code, 'valueQuantity' => $quantity];
                 continue;
             }
-            $observations[] = $base($code) + ['valueQuantity' => $quantity];
+            $observations[$linkId] = $base($code) + ['valueQuantity' => $quantity];
         }
-        if ($panel !== null) {
-            array_unshift($observations, $base($panel) + ['component' => $components]);
+        if ($panel !== null && $panelKey !== null) {
+            $observations = [$panelKey => $base($panel) + ['component' => $components]] + $observations;
         }
         if ($observations === []) {
             throw new InvalidArgumentException('Enter at least one reading.');
         }
         // The patient's note goes with the readings once, not on every one of them.
         if ($note !== null) {
-            $observations[0]['note'] = $note;
+            $observations[array_key_first($observations)]['note'] = $note;
         }
 
         return $observations;
@@ -204,9 +210,12 @@ final class HomeVitals
     }
 
     /**
+     * The answer as a UCUM quantity, or null when it is not a number or the item has no unit.
+     *
      * @param array<string, mixed> $answer
      * @param array<string, mixed> $item
      * @return ?array<string, mixed>
+     * @throws InvalidArgumentException when the value is outside the item's minValue/maxValue
      */
     private static function quantity(array $answer, array $item): ?array
     {
@@ -215,10 +224,30 @@ final class HomeVitals
             return null;
         }
         $unit = null;
+        $min = null;
+        $max = null;
         foreach (is_array($item['extension'] ?? null) ? $item['extension'] : [] as $extension) {
-            if (($extension['url'] ?? null) === 'http://hl7.org/fhir/StructureDefinition/questionnaire-unit' && is_array($extension['valueCoding'] ?? null)) {
-                $unit = $extension['valueCoding'];
+            if (!is_array($extension)) {
+                continue;
             }
+            $url = $extension['url'] ?? null;
+            $bound = $extension['valueInteger'] ?? $extension['valueDecimal'] ?? null;
+            if ($url === 'http://hl7.org/fhir/StructureDefinition/questionnaire-unit' && is_array($extension['valueCoding'] ?? null)) {
+                $unit = $extension['valueCoding'];
+            } elseif ($url === 'http://hl7.org/fhir/StructureDefinition/minValue' && (is_int($bound) || is_float($bound))) {
+                $min = $bound;
+            } elseif ($url === 'http://hl7.org/fhir/StructureDefinition/maxValue' && (is_int($bound) || is_float($bound))) {
+                $max = $bound;
+            }
+        }
+        if (($min !== null && $value < $min) || ($max !== null && $value > $max)) {
+            $label = is_string($item['text'] ?? null) ? $item['text'] : (string)($item['linkId'] ?? 'A reading');
+            throw new InvalidArgumentException(sprintf(
+                '%s must be between %s and %s.',
+                $label,
+                $min !== null ? (string)$min : 'any',
+                $max !== null ? (string)$max : 'any'
+            ));
         }
         if (!is_array($unit) || !is_string($unit['code'] ?? null)) {
             return null;

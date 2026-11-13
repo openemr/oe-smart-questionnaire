@@ -77,21 +77,43 @@ if ($action === 'vitals') {
     if (!$session->isPatient() || ($session->record['vitals_mode'] ?? false) !== true || !$session->canCreate('Observation')) {
         View::json(409, ['success' => false, 'message' => 'Readings can only be sent as vital signs when the server allows it.']);
     }
+    // Readings a failed earlier attempt already saved (by linkId); a retry sends only the rest.
+    $alreadySent = array_values(array_filter(is_array($submitted['alreadySent'] ?? null) ? $submitted['alreadySent'] : [], 'is_string'));
+    $sent = [];
+    $sentKeys = $alreadySent;
     try {
         $questionnaireId = $session->questionnaireId();
         $definition = $questionnaireId !== null ? $session->fhir->read('Questionnaire', $questionnaireId) : HomeVitals::bundled();
         $observations = HomeVitals::toObservations($definition, $submitted, $session->patientId);
-        $sent = [];
-        foreach ($observations as $observation) {
-            $saved = $session->fhir->save($observation);
-            $sent[] = ['id' => $saved['id'] ?? null, 'held' => LaunchSession::isHeld($saved)];
-        }
     } catch (InvalidArgumentException $exception) {
         View::json(422, ['success' => false, 'message' => $exception->getMessage()]);
     } catch (FhirException $exception) {
         $refused($exception);
     }
-    View::json(200, ['success' => true, 'observations' => $sent]);
+    foreach ($observations as $key => $observation) {
+        if (in_array($key, $alreadySent, true)) {
+            continue;
+        }
+        try {
+            $saved = $session->fhir->save($observation);
+        } catch (FhirException $exception) {
+            if ($sentKeys === []) {
+                $refused($exception);
+            }
+            // Some readings are stored: say which, so the browser does not send them twice.
+            $status = $exception->getHttpStatus();
+            View::json($status >= 400 && $status < 500 ? $status : 502, [
+                'success' => false,
+                'message' => 'Some readings were sent and some were not: ' . $exception->getMessage()
+                    . ' Send again to try only the readings that did not go.',
+                'observations' => $sent,
+                'sentKeys' => $sentKeys,
+            ]);
+        }
+        $sent[] = ['id' => $saved['id'] ?? null, 'held' => LaunchSession::isHeld($saved)];
+        $sentKeys[] = $key;
+    }
+    View::json(200, ['success' => true, 'observations' => $sent, 'sentKeys' => $sentKeys]);
 }
 
 if ($action === 'withdraw') {
@@ -145,16 +167,22 @@ if ($savedId === null) {
 
 // Re-read so the browser continues from exactly what the server stored (for a patient, the held
 // write with its held-for-review tag).
+// When that read fails, what the server did with it is unconfirmed: the copy we sent carries no
+// held-for-review tag either way, so it is not evidence the response went into the record.
+$confirmed = true;
 try {
     $current = $session->fhir->read('QuestionnaireResponse', $savedId);
 } catch (FhirException) {
     $current = $saved;
+    $confirmed = false;
 }
-// A patient can keep changing only a write still held for review.
-if (!$session->isPatient() || LaunchSession::isHeld($current)) {
+$held = $confirmed ? LaunchSession::isHeld($current) : null;
+// A patient can keep changing only a write still held for review. Unconfirmed, it stays
+// changeable here; the server refuses the change if staff have already decided.
+if (!$session->isPatient() || $held !== false) {
     $session->remember([
         'editable_ids' => array_values(array_unique([...$session->editableIds(), $savedId])),
     ]);
 }
 
-View::json(200, ['success' => true, 'resource' => $current, 'held' => LaunchSession::isHeld($current)]);
+View::json(200, ['success' => true, 'resource' => $current, 'held' => $held, 'confirmed' => $confirmed]);

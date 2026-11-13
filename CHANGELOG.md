@@ -30,6 +30,8 @@ First public release (planned as 1.0.0).
     grants `patient/Observation.cu`, with the same form. The app recognizes it by title plus its
     canonical as `url` or `identifier` (`urn:ietf:rfc:3986`): OpenEMR ignores a client `url` on
     create and publishes its own.
+    The server refuses a value outside its item's `minValue`/`maxValue`. If some readings are saved
+    and a later one fails, the browser is told which went, and sending again sends only the rest.
   - Registration adds the patient scopes the server publishes (v2 only, e.g.
     `patient/QuestionnaireResponse.cu`), so a site with patient writes off still registers. Check
     reports when the server's offer has changed and the app should be registered again.

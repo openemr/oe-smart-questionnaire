@@ -277,6 +277,19 @@ check('vitals: vital-signs category, preliminary, the patient', ($byCode['8867-4
 check('vitals: the note rides on one Observation', count(array_filter($observations, static fn($o) => isset($o['note']))) === 1);
 check('vitals: nothing entered is refused', throws(fn() => HomeVitals::toObservations($homeVitals, ['item' => [['linkId' => 'taken', 'answer' => [['valueDateTime' => '2026-11-10']]]]], 'p1')) !== null);
 check('vitals: a lone systolic still makes the panel', count(HomeVitals::toObservations($homeVitals, ['item' => [['linkId' => 'bp', 'item' => [['linkId' => 'bp-systolic', 'answer' => [['valueInteger' => 120]]]]]]], 'p1')) === 1);
+check('vitals: keyed by linkId, the panel by its group', array_keys($observations) === ['bp', 'heart-rate', 'weight']);
+check('vitals: a value above the item maxValue is refused', str_contains((string)throws(fn() => HomeVitals::toObservations($homeVitals, ['item' => [
+    ['linkId' => 'heart-rate', 'answer' => [['valueInteger' => 900]]],
+]], 'p1')), 'between'));
+check('vitals: a value below the item minValue is refused', throws(fn() => HomeVitals::toObservations($homeVitals, ['item' => [
+    ['linkId' => 'bp', 'item' => [['linkId' => 'bp-systolic', 'answer' => [['valueInteger' => 5]]]]],
+]], 'p1')) !== null);
+check('vitals: a value inside the bounds is kept', count(HomeVitals::toObservations($homeVitals, ['item' => [
+    ['linkId' => 'heart-rate', 'answer' => [['valueInteger' => 72]]],
+]], 'p1')) === 1);
+check('scope drift: same scopes say nothing', Registrar::patientScopeDrift('Public patient client', 'a b', 'a b') === []);
+check('scope drift: nothing offered says nothing', Registrar::patientScopeDrift('Public patient client', 'a b', '') === []);
+check('scope drift: names the client to register again', str_contains(Registrar::patientScopeDrift('Patient portal client', 'a', 'a b')[0] ?? '', 'Register the patient portal client again'));
 @unlink($tmpConfig);
 
 echo ($failures === 0 ? "OK" : "FAILED") . " ({$count} checks, {$failures} failures)\n";

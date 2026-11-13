@@ -32,7 +32,7 @@ see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 | Item | Needed |
 |------|--------|
-| PHP | 8.1 or newer with the `curl` and `session` extensions (both standard in XAMPP) |
+| PHP | 8.1 or newer with the `curl`, `mbstring` and `session` extensions (all standard in XAMPP) |
 | Web server | Apache (XAMPP is fine), nginx + PHP-FPM, or any PHP host |
 | HTTPS | Required outside local testing. The app runs inside OpenEMR's window, which only works with a `Secure` cookie. |
 | OpenEMR | A version with native FHIR Questionnaire / QuestionnaireResponse support and the FHIR Assessments launcher (#12880 or later) |

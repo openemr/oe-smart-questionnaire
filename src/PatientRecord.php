@@ -85,7 +85,11 @@ final class PatientRecord
         return '';
     }
 
-    /** @param array<string, mixed> $observation */
+    /**
+     * A reading as text: blood pressure as systolic/diastolic, anything else as value and unit.
+     *
+     * @param array<string, mixed> $observation
+     */
     private static function value(array $observation): string
     {
         $components = is_array($observation['component'] ?? null) ? $observation['component'] : [];
@@ -102,9 +106,12 @@ final class PatientRecord
                     $diastolic = $component['valueQuantity'] ?? null;
                 }
             }
-            if (is_array($systolic) && is_array($diastolic)) {
-                return self::number($systolic['value'] ?? null) . '/' . self::number($diastolic['value'] ?? null)
-                    . ' ' . (string)($systolic['unit'] ?? 'mmHg');
+            // A panel with only one of them recorded shows "?" for the other.
+            if (is_array($systolic) || is_array($diastolic)) {
+                $unit = (is_array($systolic) ? $systolic : $diastolic)['unit'] ?? 'mmHg';
+                return self::number(is_array($systolic) ? ($systolic['value'] ?? null) : null)
+                    . '/' . self::number(is_array($diastolic) ? ($diastolic['value'] ?? null) : null)
+                    . ' ' . (is_string($unit) ? $unit : 'mmHg');
             }
         }
         $quantity = $observation['valueQuantity'] ?? null;
