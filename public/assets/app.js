@@ -91,11 +91,13 @@
         dirtyBadge.hidden = !value;
     };
 
+    /** Patient-mode badge, buttons and status line for the open response (held, unconfirmed or in the record). */
     const refreshPatientControls = () => {
         const held = current !== null && isHeld(current);
+        const unsure = current !== null && unconfirmed.has(current.id);
         statusBadge.hidden = current === null;
-        statusBadge.textContent = held ? 'Waiting for review' : 'In your record';
-        statusBadge.className = 'badge ml-2 ' + (held ? 'badge-info' : 'badge-success');
+        statusBadge.textContent = unsure ? 'Not confirmed' : (held ? 'Waiting for review' : 'In your record');
+        statusBadge.className = 'badge ml-2 ' + (unsure ? 'badge-secondary' : (held ? 'badge-info' : 'badge-success'));
 
         buttons.draft.hidden = true;
         if (!canSend) {
@@ -117,11 +119,14 @@
         buttons.new.disabled = busy;
         buttons.amend.disabled = busy;
         buttons.withdraw.disabled = busy;
-        fieldset.disabled = !editable;
+        // After a partly failed send, the saved readings are fixed: only a retry (or New) is offered.
+        fieldset.disabled = !editable || sentKeys.length > 0;
 
         working.textContent = current === null
             ? 'Your care team reviews this before it goes in your record.'
-            : (held
+            : (unsure
+                ? 'Sent; the server did not confirm what it did with it. You can still change or withdraw it until your care team reviews it.'
+                : held
                 ? 'Sent ' + formatDate(current.authored) + '. You can change or withdraw it until your care team reviews it.'
                 : 'In your record since ' + formatDate(current.authored) + '. To correct it, contact your care team.');
     };
@@ -152,6 +157,7 @@
             : 'New response — it is created on the first save.';
     };
 
+    /** Redraws the list of earlier responses, each with its status and an Open/View button. */
     const renderHistory = () => {
         if (!history) {
             return;
@@ -172,8 +178,9 @@
             const badge = document.createElement('span');
             const held = patientMode && isHeld(response);
             if (patientMode) {
-                badge.className = 'badge mr-2 ' + (held ? 'badge-info' : 'badge-success');
-                badge.textContent = held ? 'waiting for review' : 'in your record';
+                const unsure = unconfirmed.has(response.id);
+                badge.className = 'badge mr-2 ' + (unsure ? 'badge-secondary' : (held ? 'badge-info' : 'badge-success'));
+                badge.textContent = unsure ? 'not confirmed' : (held ? 'waiting for review' : 'in your record');
             } else {
                 badge.className = 'badge mr-2 ' + (STATUS_CLASSES[response.status] ?? 'badge-secondary');
                 badge.textContent = response.status ?? 'unknown';

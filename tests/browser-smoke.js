@@ -215,6 +215,8 @@ const check = (name, ok, detail = '') => {
     partial.$('sq-complete').click();
     await tick(); await tick();
     check('patient vitals: a partial failure is reported', /some were not/.test(partial.$('sq-alert').textContent));
+    check('patient vitals: after a partial failure the readings are locked, retry offered', partial.$('sq-fieldset').disabled === true
+        && partial.$('sq-complete').hidden === false);
     partial.$('sq-complete').click();
     await tick(); await tick();
     check('patient vitals: the retry leaves out readings already saved', JSON.stringify(partial.sent[1]?.body.alreadySent) === '["bp"]', JSON.stringify(partial.sent[1]?.body));
@@ -225,6 +227,8 @@ const check = (name, ok, detail = '') => {
     await tick(); await tick();
     check('patient: an unconfirmed send keeps Change and Withdraw', unsure.$('sq-amend').hidden === false && unsure.$('sq-withdraw').hidden === false
         && !/in your record/.test(unsure.$('sq-alert').textContent), unsure.$('sq-alert').textContent);
+    check('patient: an unconfirmed send is labeled not confirmed, not waiting for review', unsure.$('sq-status').textContent === 'Not confirmed'
+        && /not confirmed/.test(unsure.$('sq-history').textContent) && !/waiting for review/.test(unsure.$('sq-history').textContent));
 
     console.log((failures === 0 ? 'OK' : 'FAILED') + ` (${count} checks, ${failures} failures)`);
     process.exit(failures === 0 ? 0 : 1);
