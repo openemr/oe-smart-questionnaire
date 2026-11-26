@@ -67,8 +67,8 @@ if ($isPatient) {
             . (preg_grep('~^(user|patient)/QuestionnaireResponse\.~', $missing) !== []
                 ? 'Saving responses will fail until it does. Relaunch and leave those permissions checked. '
                     . (str_contains($requestedScope, 'QuestionnaireResponse.cu')
-                        ? 'This client uses the v2 scope profile, which needs the OpenEMR consent-screen fix; on an OpenEMR '
-                            . 'without it, re-register the site with the v1 profile.'
+                        ? 'This client uses the v2 scope profile, which needs OpenEMR 8.5.0 or later (its consent-screen fix); '
+                            . 'on an older OpenEMR, re-register the site with the v1 profile.'
                         : 'If they are missing from the consent screen, re-register the app.')
                 : 'Some features may not work.');
     }

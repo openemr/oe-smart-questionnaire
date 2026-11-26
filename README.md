@@ -20,8 +20,8 @@ native FHIR Questionnaire runtime from [openemr/openemr#12880](https://github.co
 
 ## Features
 
-- **Launch from the chart.** In OpenEMR go to *Patient → Assessments → FHIR Assessments → Launch SMART
-  App*. The app follows OpenEMR's launch context:
+- **Launch from the chart.** In OpenEMR go to *Patient → Assessments → Questionnaires* and use a
+  questionnaire's **Launch App** menu. The app follows OpenEMR's launch context:
   - `start` opens a new response.
   - `continue` resumes the draft.
   - `review` opens a finished response read-only.
@@ -41,8 +41,8 @@ native FHIR Questionnaire runtime from [openemr/openemr#12880](https://github.co
   as answers to the practice's *Home vital signs* questionnaire. Once a server grants
   `patient/Observation.cu`, the app sends the same readings as vital-sign Observations, with no
   change to the form.
-- **Patient portal launch.** With an OpenEMR that has the portal SMART launcher
-  ([openemr/openemr#7115](https://github.com/openemr/openemr/issues/7115)), patients open the app
+- **Patient portal launch.** With OpenEMR 8.6.0 or later, which has the portal SMART launcher
+  ([openemr/openemr#15272](https://github.com/openemr/openemr/pull/15272)), patients open the app
   from the portal's **Health Apps** tile and land on their home page. It uses a third, confidential
   *patient portal* client (admin *Add portal client*, or `php bin/register.php --site=<name> --portal`).
 - **Draft, complete, amend.** The first save creates the QuestionnaireResponse and later saves update
@@ -53,14 +53,25 @@ native FHIR Questionnaire runtime from [openemr/openemr#12880](https://github.co
   with each OpenEMR site through OAuth2 dynamic registration, modeled on the API Explorer. The
   console can check a registration against the server and repair a mismatched client secret.
 - **Scope profiles.**
-  - `v1` (default) works with current OpenEMR.
-  - `v2` is ready for OpenEMR versions whose consent screen keeps SMART v2 read and write scopes
+  - `v1` (default) works with every supported OpenEMR.
+  - `v2` needs OpenEMR 8.5.0 or later, whose consent screen keeps SMART v2 read and write scopes
     separate.
   - Each client remembers the scopes it was registered with.
 - **Tells you what's wrong.** Registration names any scope the server would reject, and the workspace
   warns when a launch was granted less than it asked for. Errors point at the fix.
 - **EHR notification.** After a completed save the app posts a `smart-questionnaire.saved` message to
   the launching OpenEMR window, addressed to its origin, with identifiers only and never answers.
+
+## OpenEMR compatibility
+
+| Feature | OpenEMR |
+|---------|---------|
+| Launch from the chart, standalone launch, `v1` scope profile | 8.5.0 or later |
+| `v2` scope profile | 8.5.0 or later ([#14317](https://github.com/openemr/openemr/pull/14317)) |
+| Patient sign-in sending answers and home vital signs (held for staff review) | 8.6.0 or later ([#15162](https://github.com/openemr/openemr/pull/15162)), with *Patient App FHIR Writes* on |
+| Patient portal launch (**Health Apps**) | 8.6.0 or later ([#15272](https://github.com/openemr/openemr/pull/15272)) |
+
+On an OpenEMR without patient writes, patient sign-in still works read-only.
 
 ## Security at a glance
 
@@ -91,7 +102,7 @@ php bin/set-admin-password.php
 1. Serve **only** `public/` over HTTPS, for example with an Apache `Alias /smart-questionnaire …/public`.
 2. Open `<app_url>/admin.php` and register each site, or run `php bin/register.php --all`.
 3. In OpenEMR, enable the new client under **Admin → System → API Clients**.
-4. Launch from **Patient → Assessments → FHIR Assessments → Launch SMART App**.
+4. Launch from **Patient → Assessments → Questionnaires**, using a questionnaire's **Launch App** menu.
 
 **[INSTALLATION.md](INSTALLATION.md)** is the complete guide. It covers XAMPP, Apache and nginx, every
 setting, OpenEMR preparation, scope profiles, and troubleshooting.
@@ -129,11 +140,12 @@ OpenEMR only grants `user/` scopes to confidential clients, which is why the app
 A public client gets `patient/` scopes only, and may send only when Patient App FHIR Writes is
 *Confidential and public apps*; otherwise OpenEMR leaves its write scopes out of the token.
 
-Current OpenEMR also has a consent-screen limitation. Registration only accepts SMART v2 reads and
-writes as separate scopes (`.rs`, `.cud`). The consent screen then merges them back into one scope
-that its approval check drops, so the token loses that resource. The default **v1** profile avoids
-this by requesting `user/QuestionnaireResponse.read` + `.write`. The **v2** profile
-(`.rs` + `.cu`) is ready for when OpenEMR's consent screen is fixed. Details are in
+OpenEMR before 8.5.0 also has a consent-screen limitation. Registration only accepts SMART v2 reads
+and writes as separate scopes (`.rs`, `.cud`). The consent screen then merges them back into one
+scope that its approval check drops, so the token loses that resource. OpenEMR 8.5.0 fixed this
+([openemr/openemr#14317](https://github.com/openemr/openemr/pull/14317)). The default **v1** profile
+works either way by requesting `user/QuestionnaireResponse.read` + `.write`. The **v2** profile
+(`.rs` + `.cu`) needs 8.5.0 or later. Details are in
 [INSTALLATION.md → Scope profiles](INSTALLATION.md#scope-profiles).
 
 ## Development
