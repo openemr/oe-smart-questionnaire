@@ -81,7 +81,7 @@ final class Registrar
     public static function consentFixNote(array $merges): string
     {
         return 'Registered with v2 scopes (' . implode('; ', array_map(static fn($scopes) => implode(' + ', $scopes), $merges)) . '). '
-            . 'This needs an OpenEMR whose consent screen keeps v2 reads and writes separate. On an OpenEMR without that fix '
+            . 'This needs OpenEMR 8.5.0 or later, whose consent screen keeps v2 reads and writes separate. On an older OpenEMR '
             . 'the consent screen merges them into one scope that is then dropped: the app warns "The server did not grant…" '
             . 'and saves fail with 401. Re-register with the v1 profile for such a server.';
     }
@@ -236,7 +236,7 @@ final class Registrar
         $canWrite = str_contains(' ' . $portalScope . ' ', ' patient/QuestionnaireResponse.cu ');
 
         return 'Patient portal client registered. Enable it in OpenEMR (Admin > System > API Clients); the patient portal '
-            . 'then shows it under Health Apps. It needs an OpenEMR with the portal SMART launcher (openemr/openemr#7115). '
+            . 'then shows it under Health Apps. It needs OpenEMR 8.6.0 or later, which has the portal SMART launcher (openemr/openemr#15272). '
             . ($canWrite
                 ? 'Patients who open it can send questionnaires and home vital signs, held for staff review.'
                 : 'The server offers no patient write scopes now, so patients can read only.');

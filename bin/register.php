@@ -15,7 +15,7 @@
  *   php bin/register.php --site=localhost --client-id=… [--client-secret=…]
  *                                                     record a client made in OpenEMR's UI
  *   [--scopes=v1|v2]                                  scope profile (default: the site's, else v1);
- *                                                     v2 needs the OpenEMR consent-screen fix
+ *                                                     v2 needs OpenEMR 8.5.0 or later
  *   [--registration-endpoint=…]                       override the registration endpoint
  *
  * OpenEMR registers new clients disabled: enable them under Admin > System > API Clients.

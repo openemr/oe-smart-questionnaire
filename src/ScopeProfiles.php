@@ -83,7 +83,7 @@ final class ScopeProfiles
                 false
             ),
             'v2' => self::build(
-                'SMART v2 (.rs + .cu) for QuestionnaireResponse — needs the OpenEMR consent-screen fix',
+                'SMART v2 (.rs + .cu) for QuestionnaireResponse — needs OpenEMR 8.5.0 or later (consent-screen fix)',
                 'user/QuestionnaireResponse.rs user/QuestionnaireResponse.cu',
                 true
             ),

@@ -11,8 +11,8 @@ see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ```
  OpenEMR (the EHR)                          SMART Questionnaires (this app)
  ─────────────────                          ───────────────────────────────
- Patient → Assessments → FHIR Assessments
-   "Launch SMART App" ──── launch + iss ───▶ launch.php
+ Patient → Assessments → Questionnaires
+   "Launch App" ────────── launch + iss ───▶ launch.php
                                              │ discovers OpenEMR's endpoints,
  OAuth2 authorize  ◀──── authorize (PKCE) ───┘ redirects the browser to sign in
    │ clinician approves
@@ -35,7 +35,7 @@ see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | PHP | 8.1 or newer with the `curl`, `mbstring` and `session` extensions (all standard in XAMPP) |
 | Web server | Apache (XAMPP is fine), nginx + PHP-FPM, or any PHP host |
 | HTTPS | Required outside local testing. The app runs inside OpenEMR's window, which only works with a `Secure` cookie. |
-| OpenEMR | A version with native FHIR Questionnaire / QuestionnaireResponse support and the FHIR Assessments launcher (#12880 or later) |
+| OpenEMR | 8.5.0 or later. Patient sign-in writes and the patient portal launch need 8.6.0 or later (see the [compatibility table](README.md#openemr-compatibility)). |
 | Network | The app server must reach each OpenEMR's `/apis/default/fhir` and `/oauth2/default` URLs |
 
 ## 3. Install the app
@@ -149,16 +149,16 @@ A scope profile is the set of scopes a client is registered with. Two ship with 
 
 | Profile | QuestionnaireResponse scopes | Use it when |
 |---------|------------------------------|-------------|
-| `v1` (default) | `user/QuestionnaireResponse.read` + `.write` | Any current OpenEMR. |
-| `v2` | `user/QuestionnaireResponse.rs` + `.cu` | The OpenEMR has the consent-screen fix that keeps SMART v2 reads and writes as separate scopes. |
+| `v1` (default) | `user/QuestionnaireResponse.read` + `.write` | Any supported OpenEMR. |
+| `v2` | `user/QuestionnaireResponse.rs` + `.cu` | OpenEMR 8.5.0 or later, whose consent screen keeps SMART v2 reads and writes as separate scopes ([openemr/openemr#14317](https://github.com/openemr/openemr/pull/14317)). |
 
 Both also request `openid fhirUser launch user/Patient.rs user/Questionnaire.rs` (EHR launch), with
 `launch/patient` for standalone launch.
 
-Why v2 needs the fix: OpenEMR's registration only accepts v2 reads and writes as separate scopes, but an
-unfixed consent screen merges them back into one `.crus` scope that its own approval check then drops. The
+Why v2 needs 8.5.0: OpenEMR's registration only accepts v2 reads and writes as separate scopes, but the
+consent screen before 8.5.0 merges them back into one `.crus` scope that its own approval check then drops. The
 token then has no QuestionnaireResponse access and every save fails with 401. The app still lets you
-register `v2`, since you may be preparing for the fix, but it notes the requirement. If a launch loses
+register `v2`, since you may be preparing to upgrade, but it notes the requirement. If a launch loses
 the scope, the workspace says so at the top.
 
 Every client remembers the exact scopes it was registered with, and launches request exactly those.
@@ -174,10 +174,14 @@ Signed in as an administrator:
      OpenEMR adds its web root and `/apis/default/fhir` to form the `iss` the app sees.
    - **Enable OpenEMR Standard FHIR REST API**: on.
    - **Enable OpenEMR SMART ON FHIR Context Test Launches**: optional. Only needed for the
-     test-launch buttons on the patient dashboard; the FHIR Assessments launcher does not use it.
+     test-launch buttons on the patient dashboard; the questionnaire **Launch App** menu does not use it.
    - Save.
 2. Make sure at least one questionnaire is active. Active questionnaires are the ones listed
-   under **Patient → Assessments → FHIR Assessments**.
+   under **Patient → Assessments → Questionnaires**.
+   On OpenEMR 8.6.0 or later, also offer each questionnaire for SMART launch: on that page's
+   **Availability** tab, tick **SMART launch** for the questionnaire (or add a category rule).
+   Use **Limits → Only for SMART app** to offer it to this app only. Without a SMART launch rule,
+   the questionnaire's **Launch App** menu doesn't list the app, and OpenEMR refuses the launch.
 3. The signing-in clinician needs the **Patients → Medical/History** (`patients/med`) permission.
    OpenEMR checks it both for the assessments page and for FHIR QuestionnaireResponse writes.
 
@@ -249,8 +253,8 @@ Until it is enabled, the app does not appear in OpenEMR's launch menus and launc
 
 ## 8. Launch from a patient's chart
 
-1. Open a patient, then **Assessments → FHIR Assessments**.
-2. Each questionnaire card has a **Launch SMART App** menu listing enabled SMART clients. Pick
+1. Open a patient, then **Assessments → Questionnaires**.
+2. Each questionnaire has a **Launch App** menu listing enabled SMART clients. Pick
    **OpenEMR SMART Questionnaires (<site>)**.
 3. The first time, OpenEMR shows its authorization screen with the requested permissions.
    Approve it.
@@ -302,8 +306,8 @@ For patients to *send* anything, in OpenEMR:
 
 ### Patient portal launch
 
-With an OpenEMR that has the portal SMART launcher
-([openemr/openemr#7115](https://github.com/openemr/openemr/issues/7115)), patients can also open the
+With OpenEMR 8.6.0 or later, which has the portal SMART launcher
+([openemr/openemr#15272](https://github.com/openemr/openemr/pull/15272)), patients can also open the
 app from the patient portal's **Health Apps** tile.
 
 1. On the administration page, **Add portal client** for the server, or run
@@ -342,7 +346,7 @@ After a **Complete** or amendment, the app sends a `smart-questionnaire.saved` m
 OpenEMR window that opened it (addressed to OpenEMR's origin only, identifiers but no answers),
 so an EHR page that listens for it can refresh.
 
-Completed responses are visible in OpenEMR under **FHIR Assessments → Assessment History**.
+Completed responses are visible in OpenEMR under **Assessments → Questionnaires → Assessment History**.
 
 ## 11. More than one OpenEMR
 
@@ -357,7 +361,7 @@ in different tabs.
 |--------|------|
 | `app_url` (moved the app) | Re-register every site and enable the new clients; disable the old ones. |
 | Scopes | Re-register every site. |
-| OpenEMR gains the consent-screen fix | Optionally move that site to `v2`: on the admin page choose `v2` next to **Re-register** (or `php bin/register.php --site=<name> --scopes=v2`), enable the new client, disable the old one, relaunch. **Check** then shows `v2` for the site. To make `v2` the default for new registrations set `'default_scope_profile' => 'v2'`. |
+| OpenEMR upgraded to 8.5.0 or later | Optionally move that site to `v2`: on the admin page choose `v2` next to **Re-register** (or `php bin/register.php --site=<name> --scopes=v2`), enable the new client, disable the old one, relaunch. **Check** then shows `v2` for the site. To make `v2` the default for new registrations set `'default_scope_profile' => 'v2'`. |
 | New site | Add it to `sites`, register, enable. |
 | Updated OpenEMR questionnaire runtime | Normally arrives with an app release. To take one early, copy `interface/forms/questionnaire_assessments/native/openemr_questionnaire.js` and `.css` from OpenEMR into `public/assets/runtime/` (see [CONTRIBUTING.md](CONTRIBUTING.md#vendored-runtime)). |
 | New app version | `git pull` (or extract the new release over the old folder), then read [CHANGELOG.md](CHANGELOG.md) for anything to do. `config.php` and `var/` are never touched by an upgrade. Re-register only if the changelog says scopes or URIs changed. |
@@ -368,7 +372,7 @@ in different tabs.
 | Symptom | Cause and fix |
 |---------|---------------|
 | "This app is not registered with https://…/fhir" | The `iss` OpenEMR sent does not match any registered site. The message shows the exact `iss`. Make the site URL in `config.php` match it (section 4), or register that URL on the admin page. |
-| Launch menu doesn't list the app | The client is disabled, or was registered without `launch`. Enable it under **API Clients**; re-register if its scopes are wrong. |
+| Launch menu doesn't list the app | The client is disabled, or was registered without `launch`. Enable it under **API Clients**; re-register if its scopes are wrong. On OpenEMR 8.6.0 or later, the questionnaire also needs a **SMART launch** rule on the **Availability** tab (section 5). |
 | "Token request failed (HTTP 401): Client authentication failed" after approving the consent screen | OpenEMR rejected the app's client secret. Run **Check** for the site: it reads the registration back and reports whether the saved secret matches. **Repair secret** fixes a mismatch. If Check says OpenEMR can't decrypt the secret or no longer knows the client, register again and enable the new client. OpenEMR logs a mismatch as "Confidential client sent invalid client secret"; a decrypt failure is not logged. |
 | A patient signed in with the public app sees "You can look, but not send" | Patient App FHIR Writes is *Confidential apps*, so OpenEMR leaves a public client's write scopes out. Use the confidential patient sign-in, or set it to *Confidential and public apps*. |
 | "Portal launch unavailable" | No patient portal client is saved for that server. Use **Add portal client** on the administration page (or `php bin/register.php --site=<name> --portal`). |
@@ -376,8 +380,8 @@ in different tabs.
 | The portal shows no **Health Apps** tile | The FHIR API is off, or no portal client is enabled. Enable the portal client under **API Clients**; it must have `launch` and patient/ scopes only. |
 | "Public sign-in unavailable" | No public patient client is saved for that server. Use **Add public client** on the administration page (or `php bin/register.php --site=<name> --public`). |
 | `invalid_client` from OpenEMR | Client disabled, or `var/clients.json` holds an old client. **Check** on the admin page, then enable or re-register. |
-| Workspace says "…This client uses the v2 scope profile, which needs the OpenEMR consent-screen fix" | The site was registered with `v2` but its OpenEMR doesn't have the fix, so consent dropped the QuestionnaireResponse scopes. Re-register the site with `v1`, or install the OpenEMR fix. |
-| Save fails with HTTP 401 "Unauthorized", or the workspace says "The server did not grant: user/QuestionnaireResponse…" | The token has no QuestionnaireResponse write access. Either a permission was unchecked on OpenEMR's consent screen (relaunch and leave it checked), or the app was registered with v2 read+write scopes such as `.rs` + `.cu`, which OpenEMR's consent screen merges and then drops. Use the shipped v1 `.read`/`.write` scopes and re-register. The OpenEMR fix for the consent screen is in `openemr/templates/oauth2/scope-authorize.html.twig`. |
+| Workspace says "…This client uses the v2 scope profile, which needs OpenEMR 8.5.0 or later" | The site was registered with `v2` but its OpenEMR is older than 8.5.0, so consent dropped the QuestionnaireResponse scopes. Re-register the site with `v1`, or upgrade OpenEMR. |
+| Save fails with HTTP 401 "Unauthorized", or the workspace says "The server did not grant: user/QuestionnaireResponse…" | The token has no QuestionnaireResponse write access. Either a permission was unchecked on OpenEMR's consent screen (relaunch and leave it checked), or the app was registered with v2 read+write scopes such as `.rs` + `.cu`, which the consent screen of an OpenEMR older than 8.5.0 merges and then drops. Use the shipped v1 `.read`/`.write` scopes and re-register, or upgrade OpenEMR. |
 | Registration fails: "the server does not accept these scopes" | The message names each rejected scope and what the server offers for that resource. The usual cause is a combined read+write scope such as `user/QuestionnaireResponse.crus`; split it into `user/QuestionnaireResponse.rs user/QuestionnaireResponse.cu`. **Check** on the admin page (or `php bin/register.php --site=<name> --check`) runs the same test without registering. |
 | `invalid_scope` at launch, or missing permissions | Scopes were edited after registering. Re-register. |
 | "Unknown or already-used authorization state" | The session cookie was lost between launch and callback. Use HTTPS for `app_url` (the cookie must be `SameSite=None; Secure` inside OpenEMR's window), and don't use the browser's back button during sign-in. Open the app under `app_url`'s host name: OpenEMR returns to `app_url`'s `callback.php`, and a cookie set on another name (e.g. `https://localhost/…` when `app_url` is a domain) is not sent there. `launch.php` now moves such a launch to `app_url` before sign-in. |

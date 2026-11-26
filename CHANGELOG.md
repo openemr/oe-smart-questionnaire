@@ -6,12 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-First public release (planned as 1.0.0).
+## [1.0.0] - 2026-11-26
+
+First public release.
+
+Needs OpenEMR 8.5.0 or later. Patient sign-in writes and the patient portal launch need OpenEMR
+8.6.0 or later. On 8.6.0, each questionnaire must also be offered for **SMART launch** on OpenEMR's
+Questionnaires **Availability** tab. See the compatibility table in the README.
 
 ### Added
 
 - **Patient portal launch** (`launch.php?mode=portal`), for OpenEMR's portal SMART launcher
-  (openemr/openemr#7115): the portal's **Health Apps** tile opens the app with the portal patient's
+  (openemr/openemr#7115, shipped in openemr/openemr#15272): the portal's **Health Apps** tile opens the app with the portal patient's
   launch, and the patient lands on the same home page as patient sign-in, labeled *patient portal*.
   - A third client per server, confidential, with `launch` and the patient scopes (`launch` in place
     of `launch/patient`) and the portal launch URI: admin *Add portal client* / *Re-register portal* /
@@ -58,7 +64,7 @@ First public release (planned as 1.0.0).
     domain `app_url`) first redirects to `app_url`: OpenEMR returns to `app_url`'s `callback.php`, where
     the first host's session cookie is not sent, and staff and patient sign-in failed with "Unknown or
     already-used authorization state".
-  - EHR launch from OpenEMR's FHIR Assessments, honoring `fhirContext` (Questionnaire, QuestionnaireResponse) and `appContext` actions `start`, `continue` and `review`.
+  - EHR launch from OpenEMR's *Assessments → Questionnaires* **Launch App** menu, honoring `fhirContext` (Questionnaire, QuestionnaireResponse) and `appContext` actions `start`, `continue` and `review`.
   - Standalone launch with OpenEMR's patient picker and a questionnaire picker.
   - The sign-in page lists each server as a card with patient (confidential, public) and staff
     sign-in, and explains the difference between the two patient sign-ins.
@@ -96,3 +102,6 @@ First public release (planned as 1.0.0).
   - Unit, end-to-end (mock OpenEMR, including its consent-screen behavior) and jsdom browser tests.
   - PSR-12 and PHPStan level 8.
   - GitHub Actions on PHP 8.1–8.5 and Windows.
+
+[Unreleased]: https://github.com/openemr/oe-smart-questionnaire/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/openemr/oe-smart-questionnaire/releases/tag/v1.0.0
